@@ -46,3 +46,32 @@ python3 scripts/analyze_dataset.py
 - `group_config_stats.csv`：按常见设备字段和拓扑字段分组后的 config/template 分布。
 - `data_quality_issues.jsonl`：JSON 解析错误、节点/链路格式异常、链路端点缺失、
   节点 id 重复、config 不是 list 等数据质量问题。
+
+## 节点数核查
+
+如果只想核查每个图的节点数，可以运行：
+
+```bash
+python3 scripts/analyze_node_counts.py datasets -o /tmp/node_count_analysis
+```
+
+也可以修改 `scripts/analyze_node_counts.py` 顶部的默认路径：
+
+```python
+DEFAULT_DATASET_ROOT = Path("datasets")
+DEFAULT_OUTPUT_DIR = Path("/tmp/node_count_analysis")
+```
+
+然后直接运行：
+
+```bash
+python3 scripts/analyze_node_counts.py
+```
+
+输出文件包括：
+
+- `node_count_summary.json`：节点数总体统计，包含 count、min、max、mean、median。
+- `node_counts.csv`：每个 JSON 一行，包含 split、文件路径、节点数、状态和异常详情。
+- `node_counts.txt`：便于直接查看和人工对照的逐图节点数文本。
+- `node_count_histogram.csv`：节点数分布柱状图使用的数据。
+- `node_count_histogram.svg`：节点数分布柱状图，可直接用浏览器打开。
