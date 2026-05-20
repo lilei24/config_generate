@@ -18,6 +18,12 @@ from statistics import mean
 from typing import Any, Iterable
 
 
+# Local defaults. Edit these paths on the data host if you want to run the
+# script without passing paths on the command line.
+DEFAULT_DATASET_ROOT = Path("/data/my_dataset")
+DEFAULT_OUTPUT_DIR = Path("/tmp/config_analysis")
+
+
 GROUP_FIELDS = {
     "devices.TYPE": ("devices", "TYPE"),
     "devices.MODEL": ("devices", "MODEL"),
@@ -459,8 +465,20 @@ def analyze(dataset_root: Path, output_dir: Path, splits: list[str]) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Analyze train/val graph JSON datasets for config generation.")
-    parser.add_argument("dataset_root", type=Path, help="Dataset root containing train/ and val/ directories.")
-    parser.add_argument("-o", "--output-dir", type=Path, default=Path("analysis_output"), help="Directory for generated reports.")
+    parser.add_argument(
+        "dataset_root",
+        nargs="?",
+        type=Path,
+        default=DEFAULT_DATASET_ROOT,
+        help=f"Dataset root containing train/ and val/ directories. Default: {DEFAULT_DATASET_ROOT}",
+    )
+    parser.add_argument(
+        "-o",
+        "--output-dir",
+        type=Path,
+        default=DEFAULT_OUTPUT_DIR,
+        help=f"Directory for generated reports. Default: {DEFAULT_OUTPUT_DIR}",
+    )
     parser.add_argument("--splits", nargs="+", default=["train", "val"], help="Split directory names to analyze.")
     return parser.parse_args()
 

@@ -21,6 +21,20 @@ Run:
 python3 scripts/analyze_dataset.py /path/to/dataset_root -o analysis_output
 ```
 
+You can also edit the local defaults at the top of
+`scripts/analyze_dataset.py`:
+
+```python
+DEFAULT_DATASET_ROOT = Path("/data/my_dataset")
+DEFAULT_OUTPUT_DIR = Path("/tmp/config_analysis")
+```
+
+Then run without arguments:
+
+```bash
+python3 scripts/analyze_dataset.py
+```
+
 The script only uses the Python standard library and writes these reports:
 
 - `dataset_summary.json`: split totals, graph-size summaries, top config keys.
