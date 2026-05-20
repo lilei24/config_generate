@@ -1,0 +1,20 @@
+{
+  "directed": false,
+  "multigraph": false,
+  "nodes": [
+    {
+      "id": "v1",
+      "devices": {
+        "NAME": "ap-2",
+        "MODEL": "m2",
+        "TYPE": "AP",
+        "SUBTYPE": "cloud"
+      },
+      "topologyNode": {
+        "NODECLASS": "wireless"
+      },
+      "config": []
+    }
+  ],
+  "links": []
+}
