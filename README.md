@@ -91,14 +91,14 @@ python3 scripts/analyze_node_counts.py
 运行：
 
 ```bash
-python3 scripts/build_config_generation_dataset.py datasets -o /tmp/config_generation_dataset
+python3 scripts/build_config_generation_dataset.py datasets -o config_generation_dataset
 ```
 
 也可以修改脚本顶部默认路径后直接运行：
 
 ```python
 DEFAULT_DATASET_ROOT = Path("datasets")
-DEFAULT_OUTPUT_DIR = Path("/tmp/config_generation_dataset")
+DEFAULT_OUTPUT_DIR = Path("config_generation_dataset")
 ```
 
 ```bash

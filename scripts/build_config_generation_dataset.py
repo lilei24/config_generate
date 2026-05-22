@@ -1,5 +1,15 @@
 #!/usr/bin/env python3
-"""Build JSONL samples for config generation from graph JSON datasets."""
+"""从图 JSON 数据集构造配置生成任务的 JSONL 样本。
+
+当前任务粒度是预测一个 config 对象里的一个顶层 key：
+
+- node 配置来自 ``nodes[].config[]``。
+- deviceGroup 配置来自 ``deviceGroups[].configs[]``。
+- 一个训练样本只遮挡一个顶层 key，目标输出也只包含该 key 对应的配置对象。
+
+脚本把“选择哪个 key”与“怎样遮挡 key”拆成独立策略，后续可以在不改主流程
+的前提下新增前部 key、后部 key 选择策略，或者新增占位符类遮挡策略。
+"""
 
 from __future__ import annotations
 
@@ -13,16 +23,25 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence
 
 
-# Local defaults. The expected input layout is:
+# 本地默认路径。输入数据集目录结构约定为：
 # datasets/train/*.json
 # datasets/val/*.json
+# 如果真实数据在别的位置，可以改这里，也可以用命令行参数覆盖。
 DEFAULT_DATASET_ROOT = Path("datasets")
-DEFAULT_OUTPUT_DIR = Path("/tmp/config_generation_dataset")
+DEFAULT_OUTPUT_DIR = Path("config_generation_dataset")
+# 固定默认随机种子，保证同一份输入数据多次构造时随机选中的目标可复现。
 DEFAULT_RANDOM_SEED = 20260522
 
 
 @dataclass(frozen=True)
 class ConfigTarget:
+    """一个可被预测的配置顶层 key 的定位信息。
+
+    owner_index 指向所属 node 或 deviceGroup 在原图 list 中的位置。
+    config_index 指向所属 config/configs 列表中的对象位置。
+    config_key 是真正需要遮挡和预测的顶层配置名。
+    """
+
     source_kind: str
     owner_index: int
     config_index: int
@@ -34,17 +53,26 @@ class ConfigTarget:
 
 @dataclass(frozen=True)
 class BuildIssue:
+    """构造数据集时需要落盘记录的源文件问题。"""
+
     split: str
     file: str
     issue: str
     detail: str = ""
 
 
+# 目标选择器只关心“从候选池选谁”，不负责改图。
 TargetSelector = Callable[[Sequence[ConfigTarget], random.Random], ConfigTarget | None]
+# 遮挡策略只关心“给定目标后如何生成 input”，不负责挑目标。
 MaskStrategy = Callable[[dict[str, Any], ConfigTarget], dict[str, Any]]
 
 
 def iter_json_files(dataset_root: Path, splits: Iterable[str]) -> Iterable[tuple[str, Path]]:
+    """按 split 递归枚举 JSON 文件。
+
+    这里保留递归扫描，允许 train/val 下继续按业务目录分层。
+    """
+
     for split in splits:
         split_dir = dataset_root / split
         if not split_dir.exists():
@@ -55,6 +83,12 @@ def iter_json_files(dataset_root: Path, splits: Iterable[str]) -> Iterable[tuple
 
 
 def load_graph(path: Path) -> tuple[dict[str, Any] | None, str]:
+    """读取一张图。
+
+    返回 ``(graph, "")`` 表示成功；返回 ``(None, detail)`` 表示该文件不能
+    用来构造样本，调用方会把 detail 写入 build_issues.jsonl。
+    """
+
     try:
         graph = json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:  # noqa: BLE001 - bad source files are recorded and skipped.
@@ -65,6 +99,12 @@ def load_graph(path: Path) -> tuple[dict[str, Any] | None, str]:
 
 
 def top_level_config_keys(config_items: Any) -> Iterable[tuple[int, str]]:
+    """枚举 config/configs 列表内所有可预测顶层 key。
+
+    一个 config 对象通常只有一个顶层 key，但这里不依赖该假设。若一个对象里
+    有多个顶层 key，会把它们分别列成候选目标，后续只遮挡被选中的那一个。
+    """
+
     if not isinstance(config_items, list):
         return
     for config_index, config_item in enumerate(config_items):
@@ -75,6 +115,8 @@ def top_level_config_keys(config_items: Any) -> Iterable[tuple[int, str]]:
 
 
 def collect_node_targets(graph: dict[str, Any]) -> list[ConfigTarget]:
+    """收集整张图中所有 node config 候选目标。"""
+
     targets: list[ConfigTarget] = []
     nodes = graph.get("nodes")
     if not isinstance(nodes, list):
@@ -83,6 +125,7 @@ def collect_node_targets(graph: dict[str, Any]) -> list[ConfigTarget]:
     for node_index, node in enumerate(nodes):
         if not isinstance(node, dict):
             continue
+        # node_id 会写入 prompt 和 metadata，方便模型定位，也方便人工回查。
         node_id = str(node.get("id")) if node.get("id") is not None else None
         for config_index, config_key in top_level_config_keys(node.get("config")):
             targets.append(
@@ -98,6 +141,8 @@ def collect_node_targets(graph: dict[str, Any]) -> list[ConfigTarget]:
 
 
 def collect_device_group_targets(graph: dict[str, Any]) -> list[ConfigTarget]:
+    """收集整张图中所有 deviceGroup configs 候选目标。"""
+
     targets: list[ConfigTarget] = []
     device_groups = graph.get("deviceGroups")
     if not isinstance(device_groups, list):
@@ -106,6 +151,8 @@ def collect_device_group_targets(graph: dict[str, Any]) -> list[ConfigTarget]:
     for device_group_index, device_group_item in enumerate(device_groups):
         if not isinstance(device_group_item, dict):
             continue
+        # NAME 和 DEVICEGROUPTYPES 不是定位目标所必需，但保留它们后 prompt 和
+        # metadata 会更利于排查样本来源。
         device_group = device_group_item.get("deviceGroup")
         device_group_name = None
         device_group_type = None
@@ -129,20 +176,24 @@ def collect_device_group_targets(graph: dict[str, Any]) -> list[ConfigTarget]:
 
 
 def select_random_target(candidates: Sequence[ConfigTarget], rng: random.Random) -> ConfigTarget | None:
-    """Select one target from an ordered pool.
+    """从候选池里随机选择一个目标。
 
-    Future selectors that prefer earlier or later config keys can reuse the same
-    ordered candidate pool without changing sample building or mask strategies.
+    候选池顺序来自源 JSON 中 node/deviceGroup 和 config key 的原始顺序。后续如果
+    需要优先选择靠前或靠后的 key，可以新增选择器复用这个有序候选池，不需要改
+    样本构造和遮挡逻辑。
     """
     return rng.choice(candidates) if candidates else None
 
 
 TARGET_SELECTORS: dict[str, TargetSelector] = {
+    # 新增目标选择策略时在这里注册，命令行 --selector 会自动暴露可选项。
     "random": select_random_target,
 }
 
 
 def get_target_object(graph: dict[str, Any], target: ConfigTarget) -> dict[str, Any]:
+    """根据 ConfigTarget 找到包含目标 key 的 config 对象。"""
+
     if target.source_kind == "node":
         owner = graph["nodes"][target.owner_index]
         return owner["config"][target.config_index]
@@ -153,6 +204,8 @@ def get_target_object(graph: dict[str, Any], target: ConfigTarget) -> dict[str, 
 
 
 def get_target_config_list(graph: dict[str, Any], target: ConfigTarget) -> list[Any]:
+    """根据 ConfigTarget 找到目标所属的 config/configs 列表。"""
+
     if target.source_kind == "node":
         return graph["nodes"][target.owner_index]["config"]
     if target.source_kind == "device_group":
@@ -161,7 +214,13 @@ def get_target_config_list(graph: dict[str, Any], target: ConfigTarget) -> list[
 
 
 def remove_target_key(graph: dict[str, Any], target: ConfigTarget) -> dict[str, Any]:
-    """Remove only the selected config top-level key from a copied graph."""
+    """复制原图，并从 input 中删除被选中的顶层配置 key。
+
+    当前遮挡方式不额外插入占位符。若目标 key 所在 config 对象因此变成空 dict，
+    继续保留这个空对象没有有效上下文含义，所以把它从 config/configs 列表移除。
+    """
+
+    # 一定在深拷贝上操作，保证 output 仍能从原图取到完整配置内容。
     masked_graph = copy.deepcopy(graph)
     target_object = get_target_object(masked_graph, target)
     target_object.pop(target.config_key)
@@ -172,16 +231,21 @@ def remove_target_key(graph: dict[str, Any], target: ConfigTarget) -> dict[str, 
 
 
 MASK_STRATEGIES: dict[str, MaskStrategy] = {
+    # 后续可在这里注册占位符遮挡、字段级遮挡等策略。
     "remove_target_key": remove_target_key,
 }
 
 
 def target_output(graph: dict[str, Any], target: ConfigTarget) -> dict[str, Any]:
+    """从未遮挡的原图中提取监督目标。"""
+
     target_object = get_target_object(graph, target)
     return {target.config_key: copy.deepcopy(target_object[target.config_key])}
 
 
 def prompt_for_target(target: ConfigTarget) -> str:
+    """根据目标来源生成对应任务提示词。"""
+
     if target.source_kind == "node":
         node_hint = f"节点 id 为 {target.node_id} 的" if target.node_id else "指定节点的"
         return (
@@ -200,6 +264,8 @@ def prompt_for_target(target: ConfigTarget) -> str:
 
 
 def target_metadata(target: ConfigTarget) -> dict[str, Any]:
+    """把目标定位信息写入样本，便于回溯原始 JSON。"""
+
     metadata: dict[str, Any] = {
         "source_kind": target.source_kind,
         "owner_index": target.owner_index,
@@ -223,6 +289,12 @@ def build_sample(
     mask_strategy_name: str,
     mask_strategy: MaskStrategy,
 ) -> dict[str, Any]:
+    """构造一条训练样本。
+
+    prompt 描述要预测什么，input 是遮挡后的完整图上下文，output 是被遮挡的
+    单个配置顶层对象，metadata 用于调试和溯源，不承担模型输入职责。
+    """
+
     return {
         "prompt": prompt_for_target(target),
         "input": mask_strategy(graph, target),
@@ -237,6 +309,8 @@ def build_sample(
 
 
 def write_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> None:
+    """将样本逐行写成 JSONL。"""
+
     with path.open("w", encoding="utf-8") as fh:
         for row in rows:
             fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
@@ -250,6 +324,12 @@ def build_split_samples(
     mask_strategy_name: str,
     mask_strategy: MaskStrategy,
 ) -> tuple[list[dict[str, Any]], list[BuildIssue], Counter[str]]:
+    """构造单个 split 的样本和统计信息。
+
+    对每张图分别建立 node 与 device_group 两个候选池，再各选一个目标，因此
+    当前每个源 JSON 最多产出两个样本；如果某一类没有候选 key，则只产出另一类。
+    """
+
     samples: list[dict[str, Any]] = []
     issues: list[BuildIssue] = []
     counts: Counter[str] = Counter()
@@ -263,6 +343,8 @@ def build_split_samples(
             issues.append(BuildIssue(split, source_file, "bad_graph", load_detail))
             continue
 
+        # 分开建池可以控制 node/deviceGroup 两类任务的产样粒度。默认规则是每类
+        # 随机取一个，而不是把两类目标混到一个池里后只取一个。
         source_pools = {
             "node": collect_node_targets(graph),
             "device_group": collect_device_group_targets(graph),
@@ -288,6 +370,8 @@ def build_dataset(
     selector_name: str,
     mask_strategy_name: str,
 ) -> None:
+    """按 split 生成 JSONL 数据、问题清单和构造摘要。"""
+
     selector = TARGET_SELECTORS[selector_name]
     mask_strategy = MASK_STRATEGIES[mask_strategy_name]
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -304,6 +388,8 @@ def build_dataset(
     }
 
     for split_index, split in enumerate(splits):
+        # 每个 split 有独立但可复现的随机流，避免前一个 split 文件数变化后影响
+        # 后一个 split 的随机选择结果。
         split_rng = random.Random(seed + split_index)
         split_samples, split_issues, split_counts = build_split_samples(
             dataset_root,
@@ -333,6 +419,8 @@ def build_dataset(
 
 
 def parse_args() -> argparse.Namespace:
+    """解析命令行参数。"""
+
     parser = argparse.ArgumentParser(description="Build config generation JSONL data from graph JSON datasets.")
     parser.add_argument(
         "dataset_root",
@@ -366,6 +454,8 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    """脚本入口。"""
+
     args = parse_args()
     build_dataset(args.dataset_root, args.output_dir, args.splits, args.seed, args.selector, args.mask_strategy)
     print(f"Wrote config generation data to {args.output_dir}")

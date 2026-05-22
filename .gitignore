@@ -1,2 +1,4 @@
 .agents/
 .codex/
+.temp/
+config_generation_dataset/
