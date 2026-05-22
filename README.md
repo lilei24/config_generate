@@ -75,3 +75,66 @@ python3 scripts/analyze_node_counts.py
 - `node_counts.txt`：便于直接查看和人工对照的逐图节点数文本。
 - `node_count_histogram.csv`：节点数分布柱状图使用的数据。
 - `node_count_histogram.svg`：节点数分布柱状图，可直接用浏览器打开。
+
+## 配置生成训练集
+
+使用 `scripts/build_config_generation_dataset.py` 可以从图 JSON 构造配置生成
+训练样本。当前每个原始 JSON 最多生成两个样本：
+
+- 从所有 node config 顶层 key 中随机选择 1 个，构造节点配置预测样本。
+- 从所有 deviceGroup configs 顶层 key 中随机选择 1 个，构造全局设备配置预测样本。
+
+每个样本只遮挡 1 个顶层配置 key，其他节点配置、deviceGroup 配置、节点信息和
+链路信息仍保留在输入上下文中。当前默认遮挡策略会从输入 JSON 删除目标顶层 key；
+如果该 key 所在的 config 对象被删空，则同时删除这个空 config 对象。
+
+运行：
+
+```bash
+python3 scripts/build_config_generation_dataset.py datasets -o /tmp/config_generation_dataset
+```
+
+也可以修改脚本顶部默认路径后直接运行：
+
+```python
+DEFAULT_DATASET_ROOT = Path("datasets")
+DEFAULT_OUTPUT_DIR = Path("/tmp/config_generation_dataset")
+```
+
+```bash
+python3 scripts/build_config_generation_dataset.py
+```
+
+输出文件包括：
+
+- `train.jsonl`：由 `datasets/train/` 构造的训练样本。
+- `val.jsonl`：由 `datasets/val/` 构造的验证样本。
+- `build_summary.json`：原始文件数、候选配置 key 数、生成样本数和缺失目标统计。
+- `build_issues.jsonl`：无法解析或顶层结构异常的源 JSON。
+
+每行样本结构如下：
+
+```json
+{
+  "prompt": "请根据给定网络图上下文预测...",
+  "input": {
+    "nodes": [],
+    "links": []
+  },
+  "output": {
+    "cloud-ap-interfaces": {}
+  },
+  "metadata": {
+    "source_file": "train/example.json",
+    "target": {
+      "source_kind": "node",
+      "config_key": "cloud-ap-interfaces"
+    }
+  }
+}
+```
+
+目标选择与遮挡方式在脚本中分开注册：
+
+- `TARGET_SELECTORS` 当前只有 `random`，后续可新增偏向前部或后部 key 的选择器。
+- `MASK_STRATEGIES` 当前只有 `remove_target_key`，后续可新增占位符遮挡等方式。
