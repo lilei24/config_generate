@@ -174,3 +174,7 @@ python3 scripts/analyze_qa_tokens.py QA -o QA_token_analysis
 - `qa_input_token_top_longest.csv`：token 最长的样本，方便优先排查超长输入。
 - `qa_input_token_histogram.csv`：柱状图数据。
 - `qa_input_token_histogram.svg`：token 分布柱状图，可直接用浏览器打开。
+- `qa_input_token_cdf.svg`：token 累积分布图，方便查看不同上下文长度覆盖比例。
+- `qa_input_token_context_thresholds.csv`：4k 到 2048k 上下文阈值覆盖率。
+- `qa_input_token_quantiles.csv`：p50、p75、p90、p95、p99、max 分位数。
+- `qa_input_token_task_summary.csv`：按 train/val 和 node/device 分组的 token 汇总。

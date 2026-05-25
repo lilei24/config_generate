@@ -35,6 +35,27 @@ DEFAULT_QA_ROOT = Path("QA")
 DEFAULT_OUTPUT_DIR = Path("QA_token_analysis")
 DEFAULT_FIELD = "input"
 DEFAULT_PROGRESS_INTERVAL = 500
+CONTEXT_THRESHOLDS = [
+    4096,
+    8192,
+    16384,
+    24576,
+    32768,
+    65536,
+    131072,
+    262144,
+    524288,
+    1048576,
+    2097152,
+]
+QUANTILES = [
+    ("p50", 0.50),
+    ("p75", 0.75),
+    ("p90", 0.90),
+    ("p95", 0.95),
+    ("p99", 0.99),
+    ("p100", 1.00),
+]
 TASK_DIR_TO_KIND = {
     "node_config_qa": "node",
     "device_config_qa": "device",
@@ -287,6 +308,58 @@ def build_summary(rows: List[TokenRow], qa_root: Path, field: str, tokenizer: st
     return summary
 
 
+def ok_rows(rows: List[TokenRow]) -> List[TokenRow]:
+    return [row for row in rows if row.status == "ok"]
+
+
+def context_threshold_rows(rows: List[TokenRow]) -> List[Dict[str, Any]]:
+    valid_rows = ok_rows(rows)
+    token_values = [row.token_count for row in valid_rows]
+    total = len(token_values)
+    output_rows: List[Dict[str, Any]] = []
+    for threshold in CONTEXT_THRESHOLDS:
+        sample_count = sum(1 for value in token_values if value <= threshold)
+        output_rows.append(
+            {
+                "threshold": threshold,
+                "threshold_label": "%sk" % (threshold // 1024),
+                "sample_count": sample_count,
+                "total_count": total,
+                "ratio": round(sample_count / total, 6) if total else 0,
+                "overflow_count": total - sample_count,
+                "overflow_ratio": round((total - sample_count) / total, 6) if total else 0,
+            }
+        )
+    return output_rows
+
+
+def quantile_rows(rows: List[TokenRow]) -> List[Dict[str, Any]]:
+    valid_rows = ok_rows(rows)
+    token_values = sorted(row.token_count for row in valid_rows)
+    return [
+        {
+            "quantile": label,
+            "percent": percent,
+            "token_count": percentile(token_values, percent) if token_values else None,
+        }
+        for label, percent in QUANTILES
+    ]
+
+
+def group_rows(rows: List[TokenRow]) -> List[Dict[str, Any]]:
+    valid_rows = ok_rows(rows)
+    groups: DefaultDict[Tuple[str, str], List[TokenRow]] = defaultdict(list)
+    for row in valid_rows:
+        groups[(row.split, row.task)].append(row)
+    output_rows: List[Dict[str, Any]] = []
+    for (split, task), group in sorted(groups.items()):
+        stats = number_summary([row.token_count for row in group])
+        output_row: Dict[str, Any] = {"split": split, "task": task}
+        output_row.update(stats)
+        output_rows.append(output_row)
+    return output_rows
+
+
 def write_rows_csv(path: Path, rows: List[TokenRow]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as fh:
@@ -317,6 +390,15 @@ def write_histogram_csv(path: Path, bins: List[Tuple[str, int]]) -> None:
         writer.writeheader()
         for label, count in bins:
             writer.writerow({"token_count_bin": label, "sample_count": count})
+
+
+def write_dict_rows_csv(path: Path, rows: List[Dict[str, Any]], fieldnames: List[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
 
 
 def write_histogram_svg(path: Path, bins: List[Tuple[str, int]], title: str) -> None:
@@ -363,6 +445,64 @@ def write_histogram_svg(path: Path, bins: List[Tuple[str, int]], title: str) -> 
     path.write_text("\n".join(parts), encoding="utf-8")
 
 
+def cdf_points(values: List[int]) -> List[Tuple[int, float]]:
+    sorted_values = sorted(values)
+    total = len(sorted_values)
+    if not sorted_values:
+        return []
+    return [(value, (index + 1) / total) for index, value in enumerate(sorted_values)]
+
+
+def write_cdf_svg(path: Path, values: List[int], title: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    points = cdf_points(values)
+    width = 1200
+    height = 720
+    margin_left = 85
+    margin_right = 35
+    margin_top = 70
+    margin_bottom = 100
+    plot_width = width - margin_left - margin_right
+    plot_height = height - margin_top - margin_bottom
+    max_token = max(values) if values else 1
+
+    parts = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<svg xmlns="http://www.w3.org/2000/svg" width="%s" height="%s" viewBox="0 0 %s %s">' % (width, height, width, height),
+        '<rect width="100%" height="100%" fill="white"/>',
+        '<text x="%s" y="32" text-anchor="middle" font-size="24" font-family="Arial">%s</text>' % (width / 2, escape(title)),
+        '<line x1="%s" y1="%s" x2="%s" y2="%s" stroke="#222"/>' % (margin_left, margin_top + plot_height, width - margin_right, margin_top + plot_height),
+        '<line x1="%s" y1="%s" x2="%s" y2="%s" stroke="#222"/>' % (margin_left, margin_top, margin_left, margin_top + plot_height),
+        '<text x="%s" y="%s" text-anchor="middle" font-size="16" font-family="Arial">input token count</text>' % (width / 2, height - 24),
+        '<text x="20" y="%s" transform="rotate(-90 20 %s)" text-anchor="middle" font-size="16" font-family="Arial">covered sample ratio</text>' % (height / 2, height / 2),
+        '<text x="%s" y="%s" font-size="12" font-family="Arial">0</text>' % (margin_left - 20, margin_top + plot_height + 4),
+        '<text x="%s" y="%s" font-size="12" font-family="Arial">%s</text>' % (width - margin_right - 60, margin_top + plot_height + 20, max_token),
+        '<text x="%s" y="%s" font-size="12" font-family="Arial">1.0</text>' % (margin_left - 45, margin_top + 5),
+    ]
+
+    if points:
+        polyline_points = []
+        for token_value, ratio in points:
+            x = margin_left + (token_value / max_token) * plot_width if max_token else margin_left
+            y = margin_top + plot_height - ratio * plot_height
+            polyline_points.append("%.2f,%.2f" % (x, y))
+        parts.append('<polyline fill="none" stroke="#D62728" stroke-width="3" points="%s"/>' % " ".join(polyline_points))
+
+    for threshold in CONTEXT_THRESHOLDS:
+        if threshold > max_token:
+            continue
+        covered = sum(1 for value in values if value <= threshold)
+        ratio = covered / len(values) if values else 0
+        x = margin_left + (threshold / max_token) * plot_width
+        y = margin_top + plot_height - ratio * plot_height
+        parts.append('<line x1="%.2f" y1="%s" x2="%.2f" y2="%s" stroke="#999" stroke-dasharray="4 4"/>' % (x, margin_top, x, margin_top + plot_height))
+        parts.append('<circle cx="%.2f" cy="%.2f" r="4" fill="#D62728"/>' % (x, y))
+        parts.append('<text x="%.2f" y="%s" transform="rotate(45 %.2f %s)" font-size="10" font-family="Arial">%sk</text>' % (x + 4, margin_top + plot_height + 18, x + 4, margin_top + plot_height + 18, threshold // 1024))
+
+    parts.append("</svg>")
+    path.write_text("\n".join(parts), encoding="utf-8")
+
+
 def write_top_longest(path: Path, rows: List[TokenRow], limit: int) -> None:
     top_rows = sorted([row for row in rows if row.status == "ok"], key=lambda row: row.token_count, reverse=True)[:limit]
     write_rows_csv(path, top_rows)
@@ -386,6 +526,22 @@ def analyze(
     write_top_longest(output_dir / "qa_input_token_top_longest.csv", rows, 100)
     write_histogram_csv(output_dir / "qa_input_token_histogram.csv", hist_bins)
     write_histogram_svg(output_dir / "qa_input_token_histogram.svg", hist_bins, "QA Input Token Distribution")
+    write_cdf_svg(output_dir / "qa_input_token_cdf.svg", ok_token_counts, "QA Input Token CDF")
+    write_dict_rows_csv(
+        output_dir / "qa_input_token_context_thresholds.csv",
+        context_threshold_rows(rows),
+        ["threshold", "threshold_label", "sample_count", "total_count", "ratio", "overflow_count", "overflow_ratio"],
+    )
+    write_dict_rows_csv(
+        output_dir / "qa_input_token_quantiles.csv",
+        quantile_rows(rows),
+        ["quantile", "percent", "token_count"],
+    )
+    write_dict_rows_csv(
+        output_dir / "qa_input_token_task_summary.csv",
+        group_rows(rows),
+        ["split", "task", "count", "min", "max", "mean", "median", "p75", "p90", "p95", "p99"],
+    )
     (output_dir / "qa_input_token_summary.json").write_text(
         json.dumps(build_summary(rows, qa_root, field, tokenizer), ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
