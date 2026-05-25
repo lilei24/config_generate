@@ -309,11 +309,25 @@ def build_sample(
 
 
 def write_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> None:
-    """将样本逐行写成 JSONL。"""
+    """将样本逐行写成 JSONL，并保留 dict 当前字段顺序。
+
+    Python 读取 JSON 后会保留源文件中的对象 key 顺序。这里不要开启 sort_keys，
+    否则 input 内原图字段会被按字典序重排，人工和原始 JSON 对照会很困难。
+    """
 
     with path.open("w", encoding="utf-8") as fh:
         for row in rows:
-            fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def write_pretty_json(path: Path, rows: list[dict[str, Any]]) -> None:
+    """额外写一份格式化 JSON，方便人工检查样本内容。
+
+    JSONL 保持一行一条样本，适合训练程序流式读取；pretty JSON 是同一批样本
+    的数组形式，带缩进和换行，不建议作为大规模训练输入。
+    """
+
+    path.write_text(json.dumps(rows, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def build_split_samples(
@@ -400,6 +414,7 @@ def build_dataset(
             mask_strategy,
         )
         write_jsonl(output_dir / f"{split}.jsonl", split_samples)
+        write_pretty_json(output_dir / f"{split}.pretty.json", split_samples)
         all_issues.extend(
             {
                 "split": issue.split,
@@ -413,7 +428,7 @@ def build_dataset(
 
     write_jsonl(output_dir / "build_issues.jsonl", all_issues)
     (output_dir / "build_summary.json").write_text(
-        json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True),
+        json.dumps(summary, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
 

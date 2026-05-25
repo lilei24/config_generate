@@ -109,6 +109,8 @@ python3 scripts/build_config_generation_dataset.py
 
 - `train.jsonl`：由 `datasets/train/` 构造的训练样本。
 - `val.jsonl`：由 `datasets/val/` 构造的验证样本。
+- `train.pretty.json`：格式化后的训练样本，便于人工查看。
+- `val.pretty.json`：格式化后的验证样本，便于人工查看。
 - `build_summary.json`：原始文件数、候选配置 key 数、生成样本数和缺失目标统计。
 - `build_issues.jsonl`：无法解析或顶层结构异常的源 JSON。
 
