@@ -3,7 +3,7 @@
 
 当前任务粒度是预测一个 config 对象里的一个顶层 key：
 
-- node 配置来自 ``nodes[].config[]``。
+- node 配置来自 ``nodes[].configs[]``，同时兼容历史样例里的 ``nodes[].config[]``。
 - deviceGroup 配置来自 ``deviceGroups[].configs[]``。
 - 一个训练样本只遮挡一个顶层 key，目标输出也只包含该 key 对应的配置对象。
 
@@ -39,12 +39,14 @@ class ConfigTarget:
 
     owner_index 指向所属 node 或 deviceGroup 在原图 list 中的位置。
     config_index 指向所属 config/configs 列表中的对象位置。
+    config_field 记录该列表在原始 JSON 里的字段名，node 侧通常是 configs。
     config_key 是真正需要遮挡和预测的顶层配置名。
     """
 
     source_kind: str
     owner_index: int
     config_index: int
+    config_field: str
     config_key: str
     node_id: Optional[str] = None
     device_group_name: Optional[str] = None
@@ -114,6 +116,19 @@ def top_level_config_keys(config_items: Any) -> Iterable[Tuple[int, str]]:
             yield config_index, str(config_key)
 
 
+def node_config_items(node: Dict[str, Any]) -> Tuple[Optional[str], Any]:
+    """读取 node 配置列表字段。
+
+    真实数据使用 configs；保留 config 兼容早期测试 JSON。
+    """
+
+    if "configs" in node:
+        return "configs", node.get("configs")
+    if "config" in node:
+        return "config", node.get("config")
+    return None, None
+
+
 def collect_node_targets(graph: Dict[str, Any]) -> List[ConfigTarget]:
     """收集整张图中所有 node config 候选目标。"""
 
@@ -127,12 +142,16 @@ def collect_node_targets(graph: Dict[str, Any]) -> List[ConfigTarget]:
             continue
         # node_id 会写入 prompt 和 metadata，方便模型定位，也方便人工回查。
         node_id = str(node.get("id")) if node.get("id") is not None else None
-        for config_index, config_key in top_level_config_keys(node.get("config")):
+        config_field, config_items = node_config_items(node)
+        if config_field is None:
+            continue
+        for config_index, config_key in top_level_config_keys(config_items):
             targets.append(
                 ConfigTarget(
                     source_kind="node",
                     owner_index=node_index,
                     config_index=config_index,
+                    config_field=config_field,
                     config_key=config_key,
                     node_id=node_id,
                 )
@@ -167,6 +186,7 @@ def collect_device_group_targets(graph: Dict[str, Any]) -> List[ConfigTarget]:
                     source_kind="device_group",
                     owner_index=device_group_index,
                     config_index=config_index,
+                    config_field="configs",
                     config_key=config_key,
                     device_group_name=device_group_name,
                     device_group_type=device_group_type,
@@ -196,10 +216,10 @@ def get_target_object(graph: Dict[str, Any], target: ConfigTarget) -> Dict[str, 
 
     if target.source_kind == "node":
         owner = graph["nodes"][target.owner_index]
-        return owner["config"][target.config_index]
+        return owner[target.config_field][target.config_index]
     if target.source_kind == "device_group":
         owner = graph["deviceGroups"][target.owner_index]
-        return owner["configs"][target.config_index]
+        return owner[target.config_field][target.config_index]
     raise ValueError(f"unsupported target source_kind: {target.source_kind}")
 
 
@@ -207,9 +227,9 @@ def get_target_config_list(graph: Dict[str, Any], target: ConfigTarget) -> List[
     """根据 ConfigTarget 找到目标所属的 config/configs 列表。"""
 
     if target.source_kind == "node":
-        return graph["nodes"][target.owner_index]["config"]
+        return graph["nodes"][target.owner_index][target.config_field]
     if target.source_kind == "device_group":
-        return graph["deviceGroups"][target.owner_index]["configs"]
+        return graph["deviceGroups"][target.owner_index][target.config_field]
     raise ValueError(f"unsupported target source_kind: {target.source_kind}")
 
 
@@ -276,6 +296,7 @@ def target_metadata(target: ConfigTarget) -> Dict[str, Any]:
         "source_kind": target.source_kind,
         "owner_index": target.owner_index,
         "config_index": target.config_index,
+        "config_field": target.config_field,
         "config_key": target.config_key,
     }
     if target.node_id is not None:
