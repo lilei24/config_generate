@@ -164,6 +164,8 @@ python3 scripts/analyze_qa_tokens.py QA -o QA_token_analysis
 
 默认使用 `rough_bpe` 近似估算 token 数。不同大模型 tokenizer 会有差异，因此这个
 结果适合先判断上下文长度量级；确定具体模型后，可以再接入对应 tokenizer 做精确统计。
+统计过程默认每处理 500 个 QA 文件打印一次进度，可通过 `--progress-interval` 调整；
+传 `--progress-interval 0` 可关闭进度输出。
 
 输出文件包括：
 

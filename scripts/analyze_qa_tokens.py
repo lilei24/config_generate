@@ -22,6 +22,7 @@ import csv
 import json
 import math
 import re
+import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,6 +34,7 @@ from xml.sax.saxutils import escape
 DEFAULT_QA_ROOT = Path("QA")
 DEFAULT_OUTPUT_DIR = Path("QA_token_analysis")
 DEFAULT_FIELD = "input"
+DEFAULT_PROGRESS_INTERVAL = 500
 TASK_DIR_TO_KIND = {
     "node_config_qa": "node",
     "device_config_qa": "device",
@@ -63,6 +65,12 @@ def iter_qa_files(qa_root: Path, splits: Iterable[str]) -> Iterable[Tuple[str, s
             for path in sorted(task_path.rglob("*.json")):
                 if path.is_file():
                     yield split, task_kind, path
+
+
+def list_qa_files(qa_root: Path, splits: Iterable[str]) -> List[Tuple[str, str, Path]]:
+    """预先列出 QA 文件，方便知道进度总数。"""
+
+    return list(iter_qa_files(qa_root, splits))
 
 
 def stable_json_text(value: Any) -> str:
@@ -136,26 +144,53 @@ def load_sample_field(path: Path, field: str) -> Tuple[Any, str]:
     return sample[field], ""
 
 
-def collect_rows(qa_root: Path, splits: List[str], field: str, tokenizer: str) -> List[TokenRow]:
+def collect_rows(
+    qa_root: Path,
+    splits: List[str],
+    field: str,
+    tokenizer: str,
+    progress_interval: int,
+) -> List[TokenRow]:
     rows: List[TokenRow] = []
-    for split, task, path in iter_qa_files(qa_root, splits):
+    qa_files = list_qa_files(qa_root, splits)
+    total_files = len(qa_files)
+    started_at = time.time()
+
+    if progress_interval > 0:
+        print("[token] start: %s QA files" % total_files, flush=True)
+        if total_files == 0:
+            print("[token] 0/0 files (100.00%), elapsed 0.0s, 0.00 files/s, eta 0.0s", flush=True)
+
+    for file_index, (split, task, path) in enumerate(qa_files, start=1):
         value, error = load_sample_field(path, field)
         file_name = str(path.relative_to(qa_root))
         if error:
             rows.append(TokenRow(split, task, file_name, 0, 0, 0, "error", error))
-            continue
-        text = stable_json_text(value)
-        rows.append(
-            TokenRow(
-                split=split,
-                task=task,
-                file=file_name,
-                token_count=token_count(text, tokenizer),
-                char_count=len(text),
-                byte_count=len(text.encode("utf-8")),
-                status="ok",
+        else:
+            text = stable_json_text(value)
+            rows.append(
+                TokenRow(
+                    split=split,
+                    task=task,
+                    file=file_name,
+                    token_count=token_count(text, tokenizer),
+                    char_count=len(text),
+                    byte_count=len(text.encode("utf-8")),
+                    status="ok",
+                )
             )
-        )
+
+        if progress_interval > 0 and (file_index % progress_interval == 0 or file_index == total_files):
+            elapsed = max(0.001, time.time() - started_at)
+            speed = file_index / elapsed
+            remaining = max(0, total_files - file_index)
+            eta = remaining / speed if speed > 0 else 0
+            percent = (file_index / total_files * 100) if total_files else 100
+            print(
+                "[token] %s/%s files (%.2f%%), elapsed %.1fs, %.2f files/s, eta %.1fs"
+                % (file_index, total_files, percent, elapsed, speed, eta),
+                flush=True,
+            )
     return rows
 
 
@@ -333,8 +368,16 @@ def write_top_longest(path: Path, rows: List[TokenRow], limit: int) -> None:
     write_rows_csv(path, top_rows)
 
 
-def analyze(qa_root: Path, output_dir: Path, splits: List[str], field: str, tokenizer: str, bins: int) -> None:
-    rows = collect_rows(qa_root, splits, field, tokenizer)
+def analyze(
+    qa_root: Path,
+    output_dir: Path,
+    splits: List[str],
+    field: str,
+    tokenizer: str,
+    bins: int,
+    progress_interval: int,
+) -> None:
+    rows = collect_rows(qa_root, splits, field, tokenizer, progress_interval)
     ok_token_counts = [row.token_count for row in rows if row.status == "ok"]
     hist_bins = histogram_bins(ok_token_counts, bins)
 
@@ -357,12 +400,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--field", default=DEFAULT_FIELD, choices=["input", "prompt", "output"], help="Sample field to tokenize. Default: input")
     parser.add_argument("--tokenizer", default="rough_bpe", choices=["rough_bpe", "simple_unit"], help="Tokenizer estimate method.")
     parser.add_argument("--bins", type=int, default=40, help="Approximate histogram bin count when token count is above 100.")
+    parser.add_argument(
+        "--progress-interval",
+        type=int,
+        default=DEFAULT_PROGRESS_INTERVAL,
+        help="Print progress every N QA files. Use 0 to disable. Default: %(default)s",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    analyze(args.qa_root, args.output_dir, args.splits, args.field, args.tokenizer, args.bins)
+    analyze(args.qa_root, args.output_dir, args.splits, args.field, args.tokenizer, args.bins, args.progress_interval)
     print("Wrote QA token analysis to %s" % args.output_dir)
 
 
