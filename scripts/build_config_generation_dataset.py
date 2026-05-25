@@ -17,6 +17,7 @@ import argparse
 import copy
 import json
 import random
+import time
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,6 +32,7 @@ DEFAULT_DATASET_ROOT = Path("datasets")
 DEFAULT_OUTPUT_DIR = Path("QA")
 # 固定默认随机种子，保证同一份输入数据多次构造时随机选中的目标可复现。
 DEFAULT_RANDOM_SEED = 20260522
+DEFAULT_PROGRESS_INTERVAL = 100
 
 
 @dataclass(frozen=True)
@@ -82,6 +84,12 @@ def iter_json_files(dataset_root: Path, splits: Iterable[str]) -> Iterable[Tuple
         for path in sorted(split_dir.rglob("*.json")):
             if path.is_file():
                 yield split, path
+
+
+def list_split_json_files(dataset_root: Path, split: str) -> List[Path]:
+    """列出单个 split 下的 JSON 文件，便于提前知道进度总数。"""
+
+    return [path for _, path in iter_json_files(dataset_root, [split])]
 
 
 def load_graph(path: Path) -> Tuple[Optional[Dict[str, Any]], str]:
@@ -374,10 +382,12 @@ def build_split_samples(
     dataset_root: Path,
     output_dir: Path,
     split: str,
+    split_files: List[Path],
     rng: random.Random,
     selector: TargetSelector,
     mask_strategy_name: str,
     mask_strategy: MaskStrategy,
+    progress_interval: int,
 ) -> Tuple[List[BuildIssue], Counter[str]]:
     """构造单个 split 的样本和统计信息。
 
@@ -388,8 +398,15 @@ def build_split_samples(
     issues: List[BuildIssue] = []
     counts: Counter[str] = Counter()
     used_output_paths: Set[Path] = set()
+    total_files = len(split_files)
+    started_at = time.time()
 
-    for _, path in iter_json_files(dataset_root, [split]):
+    if progress_interval > 0:
+        print("[%s] start: %s files" % (split, total_files), flush=True)
+        if total_files == 0:
+            print("[%s] 0/0 files (100.00%%), elapsed 0.0s, 0.00 files/s, eta 0.0s, samples 0" % split, flush=True)
+
+    for file_index, path in enumerate(split_files, start=1):
         counts["files"] += 1
         source_file = str(path.relative_to(dataset_root))
         graph, load_detail = load_graph(path)
@@ -419,8 +436,20 @@ def build_split_samples(
             used_output_paths.add(sample_path)
             write_json(sample_path, sample)
             counts[f"{source_kind}_samples"] += 1
+            counts["samples"] += 1
 
-    counts["samples"] = counts["node_samples"] + counts["device_group_samples"]
+        if progress_interval > 0 and (file_index % progress_interval == 0 or file_index == total_files):
+            elapsed = max(0.001, time.time() - started_at)
+            speed = file_index / elapsed
+            remaining = max(0, total_files - file_index)
+            eta = remaining / speed if speed > 0 else 0
+            percent = (file_index / total_files * 100) if total_files else 100
+            print(
+                "[%s] %s/%s files (%.2f%%), elapsed %.1fs, %.2f files/s, eta %.1fs, samples %s"
+                % (split, file_index, total_files, percent, elapsed, speed, eta, counts["samples"]),
+                flush=True,
+            )
+
     return issues, counts
 
 
@@ -431,6 +460,7 @@ def build_dataset(
     seed: int,
     selector_name: str,
     mask_strategy_name: str,
+    progress_interval: int,
 ) -> None:
     """按 split 和任务类型生成 QA JSON、问题清单和构造摘要。"""
 
@@ -451,6 +481,7 @@ def build_dataset(
     }
 
     for split_index, split in enumerate(splits):
+        split_files = list_split_json_files(dataset_root, split)
         # 每个 split 有独立但可复现的随机流，避免前一个 split 文件数变化后影响
         # 后一个 split 的随机选择结果。
         split_rng = random.Random(seed + split_index)
@@ -458,10 +489,12 @@ def build_dataset(
             dataset_root,
             output_dir,
             split,
+            split_files,
             split_rng,
             selector,
             mask_strategy_name,
             mask_strategy,
+            progress_interval,
         )
         all_issues.extend(
             {
@@ -510,6 +543,12 @@ def parse_args() -> argparse.Namespace:
         default="remove_random_key",
         help="How the selected config key is hidden from input.",
     )
+    parser.add_argument(
+        "--progress-interval",
+        type=int,
+        default=DEFAULT_PROGRESS_INTERVAL,
+        help="Print progress every N source JSON files. Use 0 to disable. Default: %(default)s",
+    )
     return parser.parse_args()
 
 
@@ -517,7 +556,15 @@ def main() -> None:
     """脚本入口。"""
 
     args = parse_args()
-    build_dataset(args.dataset_root, args.output_dir, args.splits, args.seed, args.selector, args.mask_strategy)
+    build_dataset(
+        args.dataset_root,
+        args.output_dir,
+        args.splits,
+        args.seed,
+        args.selector,
+        args.mask_strategy,
+        args.progress_interval,
+    )
     print(f"Wrote config generation data to {args.output_dir}")
 
 

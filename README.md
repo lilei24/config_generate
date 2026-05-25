@@ -105,6 +105,19 @@ DEFAULT_OUTPUT_DIR = Path("QA")
 python3 scripts/build_config_generation_dataset.py
 ```
 
+构造过程会默认每处理 100 个源 JSON 打印一次进度，包括已处理数量、百分比、
+耗时、速度、预计剩余时间和已生成样本数。可以通过参数调整：
+
+```bash
+python3 scripts/build_config_generation_dataset.py datasets -o QA --progress-interval 50
+```
+
+如果不想打印进度：
+
+```bash
+python3 scripts/build_config_generation_dataset.py datasets -o QA --progress-interval 0
+```
+
 输出文件包括：
 
 - `train/node_config_qa/*.json`：由 `datasets/train/` 构造的节点配置预测样本。
