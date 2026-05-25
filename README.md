@@ -91,14 +91,14 @@ python3 scripts/analyze_node_counts.py
 运行：
 
 ```bash
-python3 scripts/build_config_generation_dataset.py datasets -o config_generation_dataset
+python3 scripts/build_config_generation_dataset.py datasets -o QA
 ```
 
 也可以修改脚本顶部默认路径后直接运行：
 
 ```python
 DEFAULT_DATASET_ROOT = Path("datasets")
-DEFAULT_OUTPUT_DIR = Path("config_generation_dataset")
+DEFAULT_OUTPUT_DIR = Path("QA")
 ```
 
 ```bash
@@ -107,14 +107,14 @@ python3 scripts/build_config_generation_dataset.py
 
 输出文件包括：
 
-- `train.jsonl`：由 `datasets/train/` 构造的训练样本。
-- `val.jsonl`：由 `datasets/val/` 构造的验证样本。
-- `train.pretty.json`：格式化后的训练样本，便于人工查看。
-- `val.pretty.json`：格式化后的验证样本，便于人工查看。
+- `train/node_config_qa/*.json`：由 `datasets/train/` 构造的节点配置预测样本。
+- `train/device_config_qa/*.json`：由 `datasets/train/` 构造的全局设备配置预测样本。
+- `val/node_config_qa/*.json`：由 `datasets/val/` 构造的节点配置预测样本。
+- `val/device_config_qa/*.json`：由 `datasets/val/` 构造的全局设备配置预测样本。
 - `build_summary.json`：原始文件数、候选配置 key 数、生成样本数和缺失目标统计。
 - `build_issues.jsonl`：无法解析或顶层结构异常的源 JSON。
 
-每行样本结构如下：
+每个样本文件使用和原始 JSON 相同的文件名。样本结构如下：
 
 ```json
 {

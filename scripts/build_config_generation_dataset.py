@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""从图 JSON 数据集构造配置生成任务的 JSONL 样本。
+"""从图 JSON 数据集构造配置生成任务的 QA 样本。
 
 当前任务粒度是预测一个 config 对象里的一个顶层 key：
 
@@ -28,7 +28,7 @@ from typing import Any, Callable, Iterable, Sequence
 # datasets/val/*.json
 # 如果真实数据在别的位置，可以改这里，也可以用命令行参数覆盖。
 DEFAULT_DATASET_ROOT = Path("datasets")
-DEFAULT_OUTPUT_DIR = Path("config_generation_dataset")
+DEFAULT_OUTPUT_DIR = Path("QA")
 # 固定默认随机种子，保证同一份输入数据多次构造时随机选中的目标可复现。
 DEFAULT_RANDOM_SEED = 20260522
 
@@ -236,6 +236,12 @@ MASK_STRATEGIES: dict[str, MaskStrategy] = {
 }
 
 
+TASK_DIRS = {
+    "node": "node_config_qa",
+    "device_group": "device_config_qa",
+}
+
+
 def target_output(graph: dict[str, Any], target: ConfigTarget) -> dict[str, Any]:
     """从未遮挡的原图中提取监督目标。"""
 
@@ -308,45 +314,59 @@ def build_sample(
     }
 
 
-def write_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> None:
-    """将样本逐行写成 JSONL，并保留 dict 当前字段顺序。
+def write_json(path: Path, data: Any) -> None:
+    """写格式化 JSON，并保留 dict 当前字段顺序。
 
     Python 读取 JSON 后会保留源文件中的对象 key 顺序。这里不要开启 sort_keys，
     否则 input 内原图字段会被按字典序重排，人工和原始 JSON 对照会很困难。
     """
 
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def write_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> None:
+    """将问题清单逐行写成 JSONL。"""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as fh:
         for row in rows:
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
-def write_pretty_json(path: Path, rows: list[dict[str, Any]]) -> None:
-    """额外写一份格式化 JSON，方便人工检查样本内容。
+def output_path_for_sample(output_dir: Path, split: str, source_kind: str, source_file: str) -> Path:
+    """根据 split、任务类型和原始文件名确定单样本输出路径。"""
 
-    JSONL 保持一行一条样本，适合训练程序流式读取；pretty JSON 是同一批样本
-    的数组形式，带缩进和换行，不建议作为大规模训练输入。
-    """
+    task_dir = TASK_DIRS[source_kind]
+    return output_dir / split / task_dir / Path(source_file).name
 
-    path.write_text(json.dumps(rows, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+def ensure_split_task_dirs(output_dir: Path, splits: Iterable[str]) -> None:
+    """预先创建 QA/<split>/<task_dir>/ 目录。"""
+
+    for split in splits:
+        for task_dir in TASK_DIRS.values():
+            (output_dir / split / task_dir).mkdir(parents=True, exist_ok=True)
 
 
 def build_split_samples(
     dataset_root: Path,
+    output_dir: Path,
     split: str,
     rng: random.Random,
     selector: TargetSelector,
     mask_strategy_name: str,
     mask_strategy: MaskStrategy,
-) -> tuple[list[dict[str, Any]], list[BuildIssue], Counter[str]]:
+) -> tuple[list[BuildIssue], Counter[str]]:
     """构造单个 split 的样本和统计信息。
 
     对每张图分别建立 node 与 device_group 两个候选池，再各选一个目标，因此
     当前每个源 JSON 最多产出两个样本；如果某一类没有候选 key，则只产出另一类。
     """
 
-    samples: list[dict[str, Any]] = []
     issues: list[BuildIssue] = []
     counts: Counter[str] = Counter()
+    used_output_paths: set[Path] = set()
 
     for _, path in iter_json_files(dataset_root, [split]):
         counts["files"] += 1
@@ -369,11 +389,18 @@ def build_split_samples(
             if target is None:
                 counts[f"{source_kind}_graphs_without_target"] += 1
                 continue
-            samples.append(build_sample(graph, split, source_file, target, mask_strategy_name, mask_strategy))
+            sample = build_sample(graph, split, source_file, target, mask_strategy_name, mask_strategy)
+            sample_path = output_path_for_sample(output_dir, split, source_kind, source_file)
+            if sample_path in used_output_paths:
+                counts["output_name_collisions"] += 1
+                issues.append(BuildIssue(split, source_file, "output_name_collision", str(sample_path)))
+                continue
+            used_output_paths.add(sample_path)
+            write_json(sample_path, sample)
             counts[f"{source_kind}_samples"] += 1
 
-    counts["samples"] = len(samples)
-    return samples, issues, counts
+    counts["samples"] = counts["node_samples"] + counts["device_group_samples"]
+    return issues, counts
 
 
 def build_dataset(
@@ -384,11 +411,12 @@ def build_dataset(
     selector_name: str,
     mask_strategy_name: str,
 ) -> None:
-    """按 split 生成 JSONL 数据、问题清单和构造摘要。"""
+    """按 split 和任务类型生成 QA JSON、问题清单和构造摘要。"""
 
     selector = TARGET_SELECTORS[selector_name]
     mask_strategy = MASK_STRATEGIES[mask_strategy_name]
     output_dir.mkdir(parents=True, exist_ok=True)
+    ensure_split_task_dirs(output_dir, splits)
 
     all_issues: list[dict[str, Any]] = []
     summary: dict[str, Any] = {
@@ -405,16 +433,15 @@ def build_dataset(
         # 每个 split 有独立但可复现的随机流，避免前一个 split 文件数变化后影响
         # 后一个 split 的随机选择结果。
         split_rng = random.Random(seed + split_index)
-        split_samples, split_issues, split_counts = build_split_samples(
+        split_issues, split_counts = build_split_samples(
             dataset_root,
+            output_dir,
             split,
             split_rng,
             selector,
             mask_strategy_name,
             mask_strategy,
         )
-        write_jsonl(output_dir / f"{split}.jsonl", split_samples)
-        write_pretty_json(output_dir / f"{split}.pretty.json", split_samples)
         all_issues.extend(
             {
                 "split": issue.split,
@@ -427,16 +454,13 @@ def build_dataset(
         summary["splits"][split] = dict(split_counts)
 
     write_jsonl(output_dir / "build_issues.jsonl", all_issues)
-    (output_dir / "build_summary.json").write_text(
-        json.dumps(summary, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    write_json(output_dir / "build_summary.json", summary)
 
 
 def parse_args() -> argparse.Namespace:
     """解析命令行参数。"""
 
-    parser = argparse.ArgumentParser(description="Build config generation JSONL data from graph JSON datasets.")
+    parser = argparse.ArgumentParser(description="Build config generation QA JSON files from graph JSON datasets.")
     parser.add_argument(
         "dataset_root",
         nargs="?",
@@ -449,7 +473,7 @@ def parse_args() -> argparse.Namespace:
         "--output-dir",
         type=Path,
         default=DEFAULT_OUTPUT_DIR,
-        help=f"Directory for generated JSONL data. Default: {DEFAULT_OUTPUT_DIR}",
+        help=f"Directory for generated QA data. Default: {DEFAULT_OUTPUT_DIR}",
     )
     parser.add_argument("--splits", nargs="+", default=["train", "val"], help="Split directory names to build.")
     parser.add_argument("--seed", type=int, default=DEFAULT_RANDOM_SEED, help="Seed for deterministic target selection.")
