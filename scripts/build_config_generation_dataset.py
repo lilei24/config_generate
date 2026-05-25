@@ -213,7 +213,7 @@ def get_target_config_list(graph: dict[str, Any], target: ConfigTarget) -> list[
     raise ValueError(f"unsupported target source_kind: {target.source_kind}")
 
 
-def remove_target_key(graph: dict[str, Any], target: ConfigTarget) -> dict[str, Any]:
+def remove_random_key(graph: dict[str, Any], target: ConfigTarget) -> dict[str, Any]:
     """复制原图，并从 input 中删除被选中的顶层配置 key。
 
     当前遮挡方式不额外插入占位符。若目标 key 所在 config 对象因此变成空 dict，
@@ -232,7 +232,7 @@ def remove_target_key(graph: dict[str, Any], target: ConfigTarget) -> dict[str, 
 
 MASK_STRATEGIES: dict[str, MaskStrategy] = {
     # 后续可在这里注册占位符遮挡、字段级遮挡等策略。
-    "remove_target_key": remove_target_key,
+    "remove_random_key": remove_random_key,
 }
 
 
@@ -486,7 +486,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--mask-strategy",
         choices=sorted(MASK_STRATEGIES),
-        default="remove_target_key",
+        default="remove_random_key",
         help="How the selected config key is hidden from input.",
     )
     return parser.parse_args()
