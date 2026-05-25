@@ -20,7 +20,7 @@ import random
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterable, Sequence
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 
 # 本地默认路径。输入数据集目录结构约定为：
@@ -46,9 +46,9 @@ class ConfigTarget:
     owner_index: int
     config_index: int
     config_key: str
-    node_id: str | None = None
-    device_group_name: str | None = None
-    device_group_type: str | None = None
+    node_id: Optional[str] = None
+    device_group_name: Optional[str] = None
+    device_group_type: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -62,12 +62,12 @@ class BuildIssue:
 
 
 # 目标选择器只关心“从候选池选谁”，不负责改图。
-TargetSelector = Callable[[Sequence[ConfigTarget], random.Random], ConfigTarget | None]
+TargetSelector = Callable[[Sequence[ConfigTarget], random.Random], Optional[ConfigTarget]]
 # 遮挡策略只关心“给定目标后如何生成 input”，不负责挑目标。
-MaskStrategy = Callable[[dict[str, Any], ConfigTarget], dict[str, Any]]
+MaskStrategy = Callable[[Dict[str, Any], ConfigTarget], Dict[str, Any]]
 
 
-def iter_json_files(dataset_root: Path, splits: Iterable[str]) -> Iterable[tuple[str, Path]]:
+def iter_json_files(dataset_root: Path, splits: Iterable[str]) -> Iterable[Tuple[str, Path]]:
     """按 split 递归枚举 JSON 文件。
 
     这里保留递归扫描，允许 train/val 下继续按业务目录分层。
@@ -82,7 +82,7 @@ def iter_json_files(dataset_root: Path, splits: Iterable[str]) -> Iterable[tuple
                 yield split, path
 
 
-def load_graph(path: Path) -> tuple[dict[str, Any] | None, str]:
+def load_graph(path: Path) -> Tuple[Optional[Dict[str, Any]], str]:
     """读取一张图。
 
     返回 ``(graph, "")`` 表示成功；返回 ``(None, detail)`` 表示该文件不能
@@ -98,7 +98,7 @@ def load_graph(path: Path) -> tuple[dict[str, Any] | None, str]:
     return graph, ""
 
 
-def top_level_config_keys(config_items: Any) -> Iterable[tuple[int, str]]:
+def top_level_config_keys(config_items: Any) -> Iterable[Tuple[int, str]]:
     """枚举 config/configs 列表内所有可预测顶层 key。
 
     一个 config 对象通常只有一个顶层 key，但这里不依赖该假设。若一个对象里
@@ -114,10 +114,10 @@ def top_level_config_keys(config_items: Any) -> Iterable[tuple[int, str]]:
             yield config_index, str(config_key)
 
 
-def collect_node_targets(graph: dict[str, Any]) -> list[ConfigTarget]:
+def collect_node_targets(graph: Dict[str, Any]) -> List[ConfigTarget]:
     """收集整张图中所有 node config 候选目标。"""
 
-    targets: list[ConfigTarget] = []
+    targets: List[ConfigTarget] = []
     nodes = graph.get("nodes")
     if not isinstance(nodes, list):
         return targets
@@ -140,10 +140,10 @@ def collect_node_targets(graph: dict[str, Any]) -> list[ConfigTarget]:
     return targets
 
 
-def collect_device_group_targets(graph: dict[str, Any]) -> list[ConfigTarget]:
+def collect_device_group_targets(graph: Dict[str, Any]) -> List[ConfigTarget]:
     """收集整张图中所有 deviceGroup configs 候选目标。"""
 
-    targets: list[ConfigTarget] = []
+    targets: List[ConfigTarget] = []
     device_groups = graph.get("deviceGroups")
     if not isinstance(device_groups, list):
         return targets
@@ -175,7 +175,7 @@ def collect_device_group_targets(graph: dict[str, Any]) -> list[ConfigTarget]:
     return targets
 
 
-def select_random_target(candidates: Sequence[ConfigTarget], rng: random.Random) -> ConfigTarget | None:
+def select_random_target(candidates: Sequence[ConfigTarget], rng: random.Random) -> Optional[ConfigTarget]:
     """从候选池里随机选择一个目标。
 
     候选池顺序来自源 JSON 中 node/deviceGroup 和 config key 的原始顺序。后续如果
@@ -185,13 +185,13 @@ def select_random_target(candidates: Sequence[ConfigTarget], rng: random.Random)
     return rng.choice(candidates) if candidates else None
 
 
-TARGET_SELECTORS: dict[str, TargetSelector] = {
+TARGET_SELECTORS: Dict[str, TargetSelector] = {
     # 新增目标选择策略时在这里注册，命令行 --selector 会自动暴露可选项。
     "random": select_random_target,
 }
 
 
-def get_target_object(graph: dict[str, Any], target: ConfigTarget) -> dict[str, Any]:
+def get_target_object(graph: Dict[str, Any], target: ConfigTarget) -> Dict[str, Any]:
     """根据 ConfigTarget 找到包含目标 key 的 config 对象。"""
 
     if target.source_kind == "node":
@@ -203,7 +203,7 @@ def get_target_object(graph: dict[str, Any], target: ConfigTarget) -> dict[str, 
     raise ValueError(f"unsupported target source_kind: {target.source_kind}")
 
 
-def get_target_config_list(graph: dict[str, Any], target: ConfigTarget) -> list[Any]:
+def get_target_config_list(graph: Dict[str, Any], target: ConfigTarget) -> List[Any]:
     """根据 ConfigTarget 找到目标所属的 config/configs 列表。"""
 
     if target.source_kind == "node":
@@ -213,7 +213,7 @@ def get_target_config_list(graph: dict[str, Any], target: ConfigTarget) -> list[
     raise ValueError(f"unsupported target source_kind: {target.source_kind}")
 
 
-def remove_random_key(graph: dict[str, Any], target: ConfigTarget) -> dict[str, Any]:
+def remove_random_key(graph: Dict[str, Any], target: ConfigTarget) -> Dict[str, Any]:
     """复制原图，并从 input 中删除被选中的顶层配置 key。
 
     当前遮挡方式不额外插入占位符。若目标 key 所在 config 对象因此变成空 dict，
@@ -230,7 +230,7 @@ def remove_random_key(graph: dict[str, Any], target: ConfigTarget) -> dict[str, 
     return masked_graph
 
 
-MASK_STRATEGIES: dict[str, MaskStrategy] = {
+MASK_STRATEGIES: Dict[str, MaskStrategy] = {
     # 后续可在这里注册占位符遮挡、字段级遮挡等策略。
     "remove_random_key": remove_random_key,
 }
@@ -242,7 +242,7 @@ TASK_DIRS = {
 }
 
 
-def target_output(graph: dict[str, Any], target: ConfigTarget) -> dict[str, Any]:
+def target_output(graph: Dict[str, Any], target: ConfigTarget) -> Dict[str, Any]:
     """从未遮挡的原图中提取监督目标。"""
 
     target_object = get_target_object(graph, target)
@@ -269,10 +269,10 @@ def prompt_for_target(target: ConfigTarget) -> str:
     raise ValueError(f"unsupported target source_kind: {target.source_kind}")
 
 
-def target_metadata(target: ConfigTarget) -> dict[str, Any]:
+def target_metadata(target: ConfigTarget) -> Dict[str, Any]:
     """把目标定位信息写入样本，便于回溯原始 JSON。"""
 
-    metadata: dict[str, Any] = {
+    metadata: Dict[str, Any] = {
         "source_kind": target.source_kind,
         "owner_index": target.owner_index,
         "config_index": target.config_index,
@@ -288,13 +288,13 @@ def target_metadata(target: ConfigTarget) -> dict[str, Any]:
 
 
 def build_sample(
-    graph: dict[str, Any],
+    graph: Dict[str, Any],
     split: str,
     source_file: str,
     target: ConfigTarget,
     mask_strategy_name: str,
     mask_strategy: MaskStrategy,
-) -> dict[str, Any]:
+) -> Dict[str, Any]:
     """构造一条训练样本。
 
     prompt 描述要预测什么，input 是遮挡后的完整图上下文，output 是被遮挡的
@@ -325,7 +325,7 @@ def write_json(path: Path, data: Any) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def write_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> None:
+def write_jsonl(path: Path, rows: Iterable[Dict[str, Any]]) -> None:
     """将问题清单逐行写成 JSONL。"""
 
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -357,16 +357,16 @@ def build_split_samples(
     selector: TargetSelector,
     mask_strategy_name: str,
     mask_strategy: MaskStrategy,
-) -> tuple[list[BuildIssue], Counter[str]]:
+) -> Tuple[List[BuildIssue], Counter[str]]:
     """构造单个 split 的样本和统计信息。
 
     对每张图分别建立 node 与 device_group 两个候选池，再各选一个目标，因此
     当前每个源 JSON 最多产出两个样本；如果某一类没有候选 key，则只产出另一类。
     """
 
-    issues: list[BuildIssue] = []
+    issues: List[BuildIssue] = []
     counts: Counter[str] = Counter()
-    used_output_paths: set[Path] = set()
+    used_output_paths: Set[Path] = set()
 
     for _, path in iter_json_files(dataset_root, [split]):
         counts["files"] += 1
@@ -406,7 +406,7 @@ def build_split_samples(
 def build_dataset(
     dataset_root: Path,
     output_dir: Path,
-    splits: list[str],
+    splits: List[str],
     seed: int,
     selector_name: str,
     mask_strategy_name: str,
@@ -418,8 +418,8 @@ def build_dataset(
     output_dir.mkdir(parents=True, exist_ok=True)
     ensure_split_task_dirs(output_dir, splits)
 
-    all_issues: list[dict[str, Any]] = []
-    summary: dict[str, Any] = {
+    all_issues: List[Dict[str, Any]] = []
+    summary: Dict[str, Any] = {
         "dataset_root": str(dataset_root),
         "output_dir": str(output_dir),
         "seed": seed,
