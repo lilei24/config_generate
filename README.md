@@ -139,4 +139,23 @@ python3 scripts/build_config_generation_dataset.py
 目标选择与遮挡方式在脚本中分开注册：
 
 - `TARGET_SELECTORS` 当前只有 `random`，后续可新增偏向前部或后部 key 的选择器。
-- `MASK_STRATEGIES` 当前只有 `remove_target_key`，后续可新增占位符遮挡等方式。
+- `MASK_STRATEGIES` 当前只有 `remove_random_key`，后续可新增占位符遮挡等方式。
+
+## QA input token 分布
+
+构造 QA 后，可以统计每个样本 `input` 的 token 数量，用来评估需要的模型上下文长度：
+
+```bash
+python3 scripts/analyze_qa_tokens.py QA -o QA_token_analysis
+```
+
+默认使用 `rough_bpe` 近似估算 token 数。不同大模型 tokenizer 会有差异，因此这个
+结果适合先判断上下文长度量级；确定具体模型后，可以再接入对应 tokenizer 做精确统计。
+
+输出文件包括：
+
+- `qa_input_token_summary.json`：整体、按 train/val、按 node/device 的 token 统计。
+- `qa_input_token_counts.csv`：每个 QA 文件一行的 token、字符、字节数明细。
+- `qa_input_token_top_longest.csv`：token 最长的样本，方便优先排查超长输入。
+- `qa_input_token_histogram.csv`：柱状图数据。
+- `qa_input_token_histogram.svg`：token 分布柱状图，可直接用浏览器打开。
