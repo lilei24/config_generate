@@ -17,8 +17,6 @@ DEFAULT_BASE_URL = "http://localhost:8000/v1"
 DEFAULT_API_KEY = "empty"
 DEFAULT_MODEL = "qwen3-8b"
 DEFAULT_TEMPERATURE = 0.2
-DEFAULT_MAX_TOKENS = 2048
-DEFAULT_MAX_INPUT_TOKENS = 0
 DEFAULT_PROGRESS_INTERVAL = 50
 
 
@@ -97,36 +95,6 @@ def load_qa(path: Path) -> Tuple[Optional[Dict[str, Any]], str]:
     return data, ""
 
 
-def compact_token_estimate(text: str) -> int:
-    """Rough token estimate for skipping overlong prompts."""
-
-    count = 0
-    index = 0
-    while index < len(text):
-        char = text[index]
-        code = ord(char)
-        if char.isspace():
-            index += 1
-            continue
-        if 0x4E00 <= code <= 0x9FFF:
-            count += 1
-            index += 1
-            continue
-        if char.isascii() and (char.isalnum() or char in "_-./"):
-            start = index
-            while index < len(text):
-                current = text[index]
-                if current.isascii() and (current.isalnum() or current in "_-./"):
-                    index += 1
-                else:
-                    break
-            count += max(1, (index - start + 3) // 4)
-            continue
-        count += 1
-        index += 1
-    return count
-
-
 def build_user_prompt(sample: Dict[str, Any]) -> Tuple[str, str]:
     question_value = sample["prompt"]
     input_value = json.dumps(sample["input"], indent=2, ensure_ascii=False)
@@ -146,14 +114,12 @@ def chat_completion(
     model: str,
     prompt: str,
     temperature: float,
-    max_tokens: int,
     disable_thinking: bool,
 ) -> str:
     kwargs: Dict[str, Any] = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": temperature,
-        "max_tokens": max_tokens,
     }
     if disable_thinking:
         kwargs["extra_body"] = {"chat_template_kwargs": {"enable_thinking": False}}
@@ -208,49 +174,31 @@ def run(args: argparse.Namespace) -> None:
         out_path = result_path(args.output_root, args.split, task_dir, args.qa_root, path)
         data, error = load_qa(path)
         answer_value = ""
-        estimated_tokens = 0
         if error:
             result = {"model-ouput": "", "answer": "", "error": error}
             append_jsonl(failure_log, {"file": str(path), "task": task_dir, "error": error})
         else:
             prompt, answer_value = build_user_prompt(data)
-            estimated_tokens = compact_token_estimate(prompt)
-            if args.max_input_tokens > 0 and estimated_tokens > args.max_input_tokens:
-                error = "estimated_input_tokens %s exceeds max_input_tokens %s" % (
-                    estimated_tokens,
-                    args.max_input_tokens,
+            try:
+                model_output = chat_completion(
+                    client=client,
+                    model=args.model,
+                    prompt=prompt,
+                    temperature=args.temperature,
+                    disable_thinking=not args.enable_thinking,
                 )
+                result = {
+                    "model-ouput": model_output,
+                    "answer": answer_value,
+                }
+            except Exception as exc:  # noqa: BLE001
+                error = str(exc)
                 result = {
                     "model-ouput": "",
                     "answer": answer_value,
                     "error": error,
-                    "estimated_input_tokens": estimated_tokens,
                 }
                 append_jsonl(failure_log, {"file": str(path), "task": task_dir, "error": error})
-            else:
-                try:
-                    model_output = chat_completion(
-                        client=client,
-                        model=args.model,
-                        prompt=prompt,
-                        temperature=args.temperature,
-                        max_tokens=args.max_tokens,
-                        disable_thinking=not args.enable_thinking,
-                    )
-                    result = {
-                        "model-ouput": model_output,
-                        "answer": answer_value,
-                        "estimated_input_tokens": estimated_tokens,
-                    }
-                except Exception as exc:  # noqa: BLE001
-                    error = str(exc)
-                    result = {
-                        "model-ouput": "",
-                        "answer": answer_value,
-                        "error": error,
-                        "estimated_input_tokens": estimated_tokens,
-                    }
-                    append_jsonl(failure_log, {"file": str(path), "task": task_dir, "error": error})
 
         write_json(out_path, result)
         if args.progress_interval > 0 and (index % args.progress_interval == 0 or index == len(qa_files)):
@@ -273,13 +221,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--api-key", default=DEFAULT_API_KEY, help="API key. vLLM often accepts any value.")
     parser.add_argument("--model", default=DEFAULT_MODEL, help="Served model name.")
     parser.add_argument("--temperature", type=float, default=DEFAULT_TEMPERATURE)
-    parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS, help="Max generated tokens.")
-    parser.add_argument(
-        "--max-input-tokens",
-        type=int,
-        default=DEFAULT_MAX_INPUT_TOKENS,
-        help="Skip files whose estimated prompt tokens exceed this value. 0 disables check.",
-    )
     parser.add_argument("--progress-interval", type=int, default=DEFAULT_PROGRESS_INTERVAL)
     parser.add_argument("--limit", type=int, default=0, help="Only run first N files. 0 means all.")
     parser.add_argument("--enable-thinking", action="store_true", help="Do not disable Qwen thinking in extra_body.")

@@ -32,15 +32,11 @@ python3 inference/batch_infer_qa.py \
   --api-key empty \
   --model qwen3-8b \
   --temperature 0.2 \
-  --max-tokens 2048 \
   --progress-interval 20
 ```
 
-如果要跳过估算超过上下文长度的样本：
-
-```bash
-python3 inference/batch_infer_qa.py --max-input-tokens 32768
-```
+脚本不会主动限制输入 token 或输出 token。样本过长、服务端上下文不足、
+服务异常等问题都会作为失败原因记录下来。
 
 每个输出 JSON 包含：
 
