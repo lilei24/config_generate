@@ -1,2 +1,10 @@
 .agents/
 .codex/
+.temp/
+QA/
+QA_token_analysis/
+config_generation_dataset/
+inference_outputs/
+temp/
+__pycache__/
+*.pyc
