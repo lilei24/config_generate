@@ -42,10 +42,17 @@ python3 inference/batch_infer_qa.py \
 
 ```json
 {
-  "model-ouput": "模型回答",
-  "answer": "标准答案"
+  "model-ouput": {
+    "模型预测的配置名": {}
+  },
+  "answer": {
+    "标准答案配置名": {}
+  }
 }
 ```
+
+如果模型输出不是合法 JSON，脚本不会中断，会额外写入
+`model-output-parse-error` 和 `model-output-raw`，方便检查原始回答。
 
 失败会记录到：
 

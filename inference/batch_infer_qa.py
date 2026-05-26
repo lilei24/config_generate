@@ -8,7 +8,7 @@ import json
 import re
 import time
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, Optional, Tuple
 
 
 DEFAULT_QA_ROOT = Path("520QA")
@@ -95,18 +95,42 @@ def load_qa(path: Path) -> Tuple[Optional[Dict[str, Any]], str]:
     return data, ""
 
 
-def build_user_prompt(sample: Dict[str, Any]) -> Tuple[str, str]:
+def build_user_prompt(sample: Dict[str, Any]) -> Tuple[str, Any]:
     question_value = sample["prompt"]
     input_value = json.dumps(sample["input"], indent=2, ensure_ascii=False)
-    answer_value = json.dumps(sample["output"], indent=2, ensure_ascii=False)
     # 模板中包含 JSON 示例的大括号，不能用 str.format。
     prompt = USER_PROMPT_TEMPLATE.replace("{input_value}", input_value).replace("{question_value}", question_value)
-    return prompt, answer_value
+    return prompt, sample["output"]
 
 
 def strip_think(text: str) -> str:
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE)
     return text.strip()
+
+
+def strip_markdown_fence(text: str) -> str:
+    text = text.strip()
+    match = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", text, flags=re.DOTALL | re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+    return text
+
+
+def parse_model_output(text: str) -> Tuple[Any, str]:
+    """Best-effort parse model output so result JSON is easy to inspect."""
+
+    cleaned = strip_markdown_fence(text)
+    candidates = [cleaned]
+    if cleaned and not cleaned.startswith(("{", "[")):
+        candidates.append("{%s}" % cleaned)
+
+    last_error = ""
+    for candidate in candidates:
+        try:
+            return json.loads(candidate), ""
+        except json.JSONDecodeError as exc:
+            last_error = str(exc)
+    return text, last_error
 
 
 def chat_completion(
@@ -173,7 +197,7 @@ def run(args: argparse.Namespace) -> None:
     for index, (task_dir, path) in enumerate(qa_files, start=1):
         out_path = result_path(args.output_root, args.split, task_dir, args.qa_root, path)
         data, error = load_qa(path)
-        answer_value = ""
+        answer_value: Any = ""
         if error:
             result = {"model-ouput": "", "answer": "", "error": error}
             append_jsonl(failure_log, {"file": str(path), "task": task_dir, "error": error})
@@ -187,10 +211,14 @@ def run(args: argparse.Namespace) -> None:
                     temperature=args.temperature,
                     disable_thinking=not args.enable_thinking,
                 )
+                parsed_output, parse_error = parse_model_output(model_output)
                 result = {
-                    "model-ouput": model_output,
+                    "model-ouput": parsed_output,
                     "answer": answer_value,
                 }
+                if parse_error:
+                    result["model-output-parse-error"] = parse_error
+                    result["model-output-raw"] = model_output
             except Exception as exc:  # noqa: BLE001
                 error = str(exc)
                 result = {
