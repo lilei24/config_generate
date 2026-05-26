@@ -5,6 +5,8 @@ QA/
 QA_token_analysis/
 config_generation_dataset/
 inference_outputs/
+inference-results/
+520QA/
 temp/
 __pycache__/
 *.pyc
