@@ -62,3 +62,33 @@ inference-results/train/failures.jsonl
 
 默认会通过 vLLM `extra_body.chat_template_kwargs.enable_thinking=false` 尝试关闭
 Qwen3 thinking，并额外去掉输出中的 `<think>...</think>` 内容。
+
+## 批量评估
+
+默认读取：
+
+```text
+inference-qwen3-8b/train/device_config_qa/*.json
+inference-qwen3-8b/train/node_config_qa/*.json
+inference-qwen3-8b/val/device_config_qa/*.json
+inference-qwen3-8b/val/node_config_qa/*.json
+```
+
+运行：
+
+```bash
+python3 inference/batch_evaluate_qa.py
+```
+
+默认输出到：
+
+```text
+metric-results/qwen3-8b/
+```
+
+其中：
+
+- `summary.json`：按 split/task 汇总指标，并统计模型推理错误数量。
+- `per_file_metrics.jsonl`：每个成功推理文件的详细指标。
+- `error_summary.csv`：按错误原因聚合的数量统计。
+- `eval_errors.jsonl`：评估脚本自身遇到的坏 JSON、缺字段等问题。
