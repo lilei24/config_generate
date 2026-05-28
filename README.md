@@ -131,6 +131,32 @@ python3 inference/batch_infer_qa_swanlab.py \
 曲线图 tooltip 仍只显示数值指标；需要查看某个点的模型回答和答案时，
 用曲线上的 step 到 `sample/table` 中查同一行。
 
+远程 LLM API 版本：
+
+```bash
+python3 inference/batch_infer_llm_api_swanlab.py \
+  --base-url http://10.246.114.119:9000/v1 \
+  --api-key empty \
+  --model Qwen-Qwen3_6-27B \
+  --temperature 0.6 \
+  --output-root inference-qwen3_6-27b \
+  --swanlab-project config-generation \
+  --swanlab-experiment qwen3_6-27b-api-inference
+```
+
+这个脚本默认会发送 system message：
+
+```text
+你是个智能助手
+```
+
+如果远程服务支持 Qwen/vLLM 的 `extra_body.chat_template_kwargs.enable_thinking=false`，
+可以额外加：
+
+```bash
+--enable-thinking-extra-body
+```
+
 带 SwanLab 记录的评估：
 
 ```bash
