@@ -29,7 +29,7 @@ from batch_infer_qa import (
     write_json,
 )
 from metric import evaluate_json
-from swanlab_utils import base_runtime_config, finish_swanlab, import_swanlab, metric_log_values
+from swanlab_utils import base_runtime_config, finish_swanlab, import_swanlab, make_text, metric_log_values
 
 
 DEFAULT_SWANLAB_PROJECT = "config-generation"
@@ -61,23 +61,29 @@ def log_sample(
     metrics: Dict[str, Any],
     error: str = "",
 ) -> None:
-    payload: Dict[str, Any] = {
+    text_payload = {
+        "index": index,
+        "split": split,
+        "task": task,
+        "file": str(path),
+        "input_value": input_value,
+        "question_value": question_value,
+        "model_answer": model_output,
+        "answer": answer,
+        "error": error,
+    }
+    swanlab.log({"sample/detail": make_text(swanlab, json_text(text_payload))}, step=index)
+
+    metric_payload: Dict[str, Any] = {
         "sample/index": index,
-        "sample/split": split,
-        "sample/task": task,
-        "sample/file": str(path),
-        "sample/input_value": json_text(input_value),
-        "sample/question_value": str(question_value),
-        "sample/model_answer": json_text(model_output) if not isinstance(model_output, str) else model_output,
-        "sample/answer": json_text(answer),
-        "sample/error": error,
-        "sample/has_error": bool(error),
+        "sample/has_error": int(bool(error)),
     }
     if "error" in metrics:
-        payload["sample/metric_error"] = metrics["error"]
+        metric_payload["sample/metric_failed"] = 1
     else:
-        payload.update(metric_log_values(metrics, prefix="sample"))
-    swanlab.log(payload, step=index)
+        metric_payload["sample/metric_failed"] = 0
+        metric_payload.update(metric_log_values(metrics, prefix="sample"))
+    swanlab.log(metric_payload, step=index)
 
 
 def run(args: argparse.Namespace) -> None:
