@@ -92,3 +92,50 @@ metric-results/qwen3-8b/
 - `per_file_metrics.jsonl`：每个成功推理文件的详细指标。
 - `error_summary.csv`：按错误原因聚合的数量统计。
 - `eval_errors.jsonl`：评估脚本自身遇到的坏 JSON、缺字段等问题。
+
+## SwanLab 推理和评估
+
+安装依赖：
+
+```bash
+pip install swanlab
+```
+
+带 SwanLab 记录的推理：
+
+```bash
+python3 inference/batch_infer_qa_swanlab.py \
+  --base-url http://localhost:8000/v1 \
+  --api-key empty \
+  --model qwen3-8b \
+  --output-root inference-qwen3-8b \
+  --swanlab-project config-generation \
+  --swanlab-experiment qwen3-8b-inference
+```
+
+每个样本会上传：
+
+- `input_value`
+- `question_value`
+- 模型回答
+- `answer`
+- 样本级 `field_path`、`leaf_triple`、`value_accuracy`
+- 样本级 `hallucinated_rate`、`missing_rate`
+
+带 SwanLab 记录的评估：
+
+```bash
+python3 inference/batch_evaluate_qa_swanlab.py \
+  --result-root inference-qwen3-8b \
+  --output-root metric-results/qwen3-8b \
+  --swanlab-project config-generation \
+  --swanlab-experiment qwen3-8b-evaluation
+```
+
+评估脚本会上传每个 split/task 的汇总：
+
+- `field_path`
+- `leaf_triple`
+- `value_accuracy`
+- `hallucinated_rate`
+- `missing_rate`
