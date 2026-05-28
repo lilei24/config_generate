@@ -7,7 +7,7 @@ import argparse
 import json
 import time
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from batch_infer_qa import (
     DEFAULT_API_KEY,
@@ -29,12 +29,13 @@ from batch_infer_qa import (
     write_json,
 )
 from metric import evaluate_json
-from swanlab_utils import base_runtime_config, finish_swanlab, import_swanlab, make_text, metric_log_values
+from swanlab_utils import base_runtime_config, finish_swanlab, import_swanlab, make_table, metric_log_values
 
 
 DEFAULT_SWANLAB_PROJECT = "config-generation"
 DEFAULT_SWANLAB_EXPERIMENT = "qwen3-8b-inference"
 DEFAULT_SWANLAB_MODE = "cloud"
+DEFAULT_SAMPLE_TABLE_LOG_INTERVAL = 50
 
 
 def json_text(value: Any) -> str:
@@ -51,29 +52,9 @@ def sample_metric(parsed_output: Any, answer: Any) -> Dict[str, Any]:
 def log_sample(
     swanlab: Any,
     index: int,
-    split: str,
-    task: str,
-    path: Path,
-    input_value: Any,
-    question_value: Any,
-    model_output: Any,
-    answer: Any,
     metrics: Dict[str, Any],
     error: str = "",
 ) -> None:
-    text_payload = {
-        "index": index,
-        "split": split,
-        "task": task,
-        "file": str(path),
-        "input_value": input_value,
-        "question_value": question_value,
-        "model_answer": model_output,
-        "answer": answer,
-        "error": error,
-    }
-    swanlab.log({"sample/detail": make_text(swanlab, json_text(text_payload))}, step=index)
-
     metric_payload: Dict[str, Any] = {
         "sample/index": index,
         "sample/has_error": int(bool(error)),
@@ -84,6 +65,20 @@ def log_sample(
         metric_payload["sample/metric_failed"] = 0
         metric_payload.update(metric_log_values(metrics, prefix="sample"))
     swanlab.log(metric_payload, step=index)
+
+
+def sample_table_row(index: int, path: Path, model_output: Any, answer: Any) -> List[str]:
+    return [
+        str(index),
+        path.name,
+        json_text(model_output) if not isinstance(model_output, str) else model_output,
+        json_text(answer),
+    ]
+
+
+def log_sample_table(swanlab: Any, rows: List[List[str]], step: int) -> None:
+    table = make_table(swanlab, ["step", "sample_file", "model-output", "answer"], rows)
+    swanlab.log({"sample/table": table}, step=step)
 
 
 def run(args: argparse.Namespace) -> None:
@@ -111,34 +106,25 @@ def run(args: argparse.Namespace) -> None:
 
     success_count = 0
     error_count = 0
+    sample_rows: List[List[str]] = []
     for index, (task_dir, path) in enumerate(qa_files, start=1):
         out_path = result_path(args.output_root, args.split, task_dir, args.qa_root, path)
         data, error = load_qa(path)
         answer_value: Any = ""
-        input_value: Any = ""
-        question_value: Any = ""
         metrics: Dict[str, Any] = {}
 
         if error:
             error_count += 1
             result = {"model-ouput": "", "answer": "", "error": error}
             append_jsonl(failure_log, {"file": str(path), "task": task_dir, "error": error})
+            sample_rows.append(sample_table_row(index, path, "", answer_value))
             log_sample(
                 swanlab=swanlab,
                 index=index,
-                split=args.split,
-                task=task_dir,
-                path=path,
-                input_value=input_value,
-                question_value=question_value,
-                model_output="",
-                answer=answer_value,
                 metrics=metrics,
                 error=error,
             )
         else:
-            input_value = data["input"]
-            question_value = data["prompt"]
             prompt, answer_value = build_user_prompt(data)
             try:
                 raw_model_output = chat_completion(
@@ -159,16 +145,10 @@ def run(args: argparse.Namespace) -> None:
 
                 metrics = sample_metric(parsed_output, answer_value)
                 success_count += 1
+                sample_rows.append(sample_table_row(index, path, parsed_output, answer_value))
                 log_sample(
                     swanlab=swanlab,
                     index=index,
-                    split=args.split,
-                    task=task_dir,
-                    path=path,
-                    input_value=input_value,
-                    question_value=question_value,
-                    model_output=parsed_output,
-                    answer=answer_value,
                     metrics=metrics,
                     error=parse_error,
                 )
@@ -181,16 +161,10 @@ def run(args: argparse.Namespace) -> None:
                     "error": error,
                 }
                 append_jsonl(failure_log, {"file": str(path), "task": task_dir, "error": error})
+                sample_rows.append(sample_table_row(index, path, "", answer_value))
                 log_sample(
                     swanlab=swanlab,
                     index=index,
-                    split=args.split,
-                    task=task_dir,
-                    path=path,
-                    input_value=input_value,
-                    question_value=question_value,
-                    model_output="",
-                    answer=answer_value,
                     metrics=metrics,
                     error=error,
                 )
@@ -205,6 +179,10 @@ def run(args: argparse.Namespace) -> None:
             },
             step=index,
         )
+        if args.sample_table_log_interval > 0 and (
+            index % args.sample_table_log_interval == 0 or index == len(qa_files)
+        ):
+            log_sample_table(swanlab, sample_rows, step=index)
         if args.progress_interval > 0 and (index % args.progress_interval == 0 or index == len(qa_files)):
             print_progress(index, len(qa_files), started_at)
 
@@ -233,6 +211,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--swanlab-project", default=DEFAULT_SWANLAB_PROJECT)
     parser.add_argument("--swanlab-experiment", default=DEFAULT_SWANLAB_EXPERIMENT)
     parser.add_argument("--swanlab-mode", default=DEFAULT_SWANLAB_MODE)
+    parser.add_argument(
+        "--sample-table-log-interval",
+        type=int,
+        default=DEFAULT_SAMPLE_TABLE_LOG_INTERVAL,
+        help="Log accumulated sample table every N files. 0 disables table logging.",
+    )
     return parser.parse_args()
 
 
