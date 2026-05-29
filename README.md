@@ -148,11 +148,11 @@ python3 inference/batch_infer_llm_api_swanlab.py \
 你是个智能助手
 ```
 
-如果远程服务支持 Qwen/vLLM 的 `extra_body.chat_template_kwargs.enable_thinking=false`，
-可以额外加：
+远程 API 脚本默认会发送 `extra_body.chat_template_kwargs.enable_thinking=false`
+来关闭 Qwen thinking。如果远程服务不支持这个参数，可以加：
 
 ```bash
---enable-thinking-extra-body
+--no-disable-thinking-extra-body
 ```
 
 带 SwanLab 记录的评估：

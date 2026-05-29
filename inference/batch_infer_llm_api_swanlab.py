@@ -56,7 +56,7 @@ def chat_completion(
     system_prompt: str,
     prompt: str,
     temperature: float,
-    enable_thinking_extra_body: bool,
+    disable_thinking_extra_body: bool,
 ) -> str:
     kwargs: Dict[str, Any] = {
         "model": model,
@@ -66,7 +66,7 @@ def chat_completion(
         ],
         "temperature": temperature,
     }
-    if enable_thinking_extra_body:
+    if disable_thinking_extra_body:
         kwargs["extra_body"] = {"chat_template_kwargs": {"enable_thinking": False}}
     completion = client.chat.completions.create(**kwargs)
     return strip_think(completion.choices[0].message.content or "")
@@ -143,7 +143,7 @@ def run(args: argparse.Namespace) -> None:
                     system_prompt=args.system_prompt,
                     prompt=prompt,
                     temperature=args.temperature,
-                    enable_thinking_extra_body=args.enable_thinking_extra_body,
+                    disable_thinking_extra_body=not args.no_disable_thinking_extra_body,
                 )
                 parsed_output, parse_error = parse_model_output(raw_output)
                 result = {
@@ -207,9 +207,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--limit", type=int, default=0, help="Only run first N files. 0 means all.")
     parser.add_argument("--append-failures", action="store_true", help="Append to existing failures.jsonl.")
     parser.add_argument(
-        "--enable-thinking-extra-body",
+        "--no-disable-thinking-extra-body",
         action="store_true",
-        help="Send vLLM/Qwen extra_body chat_template_kwargs.enable_thinking=false.",
+        help="Do not send extra_body chat_template_kwargs.enable_thinking=false.",
     )
     parser.add_argument("--swanlab-project", default=DEFAULT_SWANLAB_PROJECT)
     parser.add_argument("--swanlab-experiment", default=DEFAULT_SWANLAB_EXPERIMENT)
