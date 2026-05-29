@@ -115,7 +115,7 @@ python3 inference/batch_infer_qa_swanlab.py \
 
 每个样本会上传：
 
-- `sample/table` 表格，包含 step、样本文件名、模型回答、`answer`
+- `sample/prediction` 文本，包含 JSON 文件名、模型回答、`answer`
 - 样本级 `sample/field_path/precision`
 - 样本级 `sample/field_path/recall`
 - 样本级 `sample/field_path/f1`
@@ -125,11 +125,10 @@ python3 inference/batch_infer_qa_swanlab.py \
 - 样本级 `sample/value_accuracy/accuracy`
 - 样本级 `sample/hallucination_missing/hallucinated_rate`
 - 样本级 `sample/hallucination_missing/missing_rate`
-
-`sample/table` 默认每 50 个样本更新一次，可以通过
-`--sample-table-log-interval` 调整。设为 `1` 时每个样本都更新表格。
-曲线图 tooltip 仍只显示数值指标；需要查看某个点的模型回答和答案时，
-用曲线上的 step 到 `sample/table` 中查同一行。
+- 截至当前 step 的累计指标 `eval/field_path/*`
+- 截至当前 step 的累计指标 `eval/leaf_triple/*`
+- 截至当前 step 的累计指标 `eval/value_accuracy/accuracy`
+- 截至当前 step 的累计指标 `eval/hallucination_missing/*`
 
 远程 LLM API 版本：
 

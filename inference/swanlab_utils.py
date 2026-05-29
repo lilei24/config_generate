@@ -63,14 +63,11 @@ def metric_log_values(metrics: Dict[str, Any], prefix: str = "") -> Dict[str, An
     }
 
 
-def make_table(swanlab: Any, headers: list[str], rows: list[list[Any]]) -> Any:
-    echarts = getattr(swanlab, "echarts", None)
-    table_cls = getattr(echarts, "Table", None) if echarts is not None else None
-    if table_cls is None:
-        raise RuntimeError("Current SwanLab package does not provide swanlab.echarts.Table.")
-    table = table_cls()
-    table.add(headers, rows)
-    return table
+def make_text(swanlab: Any, text: str) -> Any:
+    text_cls = getattr(swanlab, "Text", None)
+    if text_cls is None:
+        raise RuntimeError("Current SwanLab package does not provide swanlab.Text.")
+    return text_cls(text)
 
 
 def finish_swanlab(swanlab: Any) -> None:
