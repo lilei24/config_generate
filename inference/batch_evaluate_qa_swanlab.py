@@ -25,6 +25,7 @@ DEFAULT_SWANLAB_PROJECT = "config-generation"
 DEFAULT_SWANLAB_EXPERIMENT = "qwen3-8b-evaluation"
 DEFAULT_SWANLAB_MODE = "cloud"
 DEFAULT_SWANLAB_LOG_STEP = 0
+DEFAULT_SWANLAB_LOG_PREFIX = "eval"
 
 
 def read_summary(path: Path) -> Dict[str, Any]:
@@ -40,19 +41,31 @@ def normalize_resume(value: str) -> Any:
     return value
 
 
-def log_summary(swanlab: Any, summary: Dict[str, Any], step: int) -> None:
+def join_metric_name(prefix: str, name: str) -> str:
+    clean_prefix = prefix.strip("/")
+    clean_name = name.strip("/")
+    return "%s/%s" % (clean_prefix, clean_name) if clean_prefix else clean_name
+
+
+def log_summary(swanlab: Any, summary: Dict[str, Any], step: int, log_prefix: str) -> None:
     payload: Dict[str, Any] = {
-        "summary/total_files": summary.get("total_files", 0),
-        "summary/evaluated_files": summary.get("evaluated_files", 0),
-        "summary/model_error_files": summary.get("model_error_files", 0),
-        "summary/eval_error_files": summary.get("eval_error_files", 0),
+        join_metric_name(log_prefix, "summary/total_files"): summary.get("total_files", 0),
+        join_metric_name(log_prefix, "summary/evaluated_files"): summary.get("evaluated_files", 0),
+        join_metric_name(log_prefix, "summary/model_error_files"): summary.get("model_error_files", 0),
+        join_metric_name(log_prefix, "summary/eval_error_files"): summary.get("eval_error_files", 0),
     }
-    total_files = payload["summary/total_files"]
-    payload["summary/model_error_rate"] = payload["summary/model_error_files"] / total_files if total_files else 0.0
-    payload["summary/eval_error_rate"] = payload["summary/eval_error_files"] / total_files if total_files else 0.0
+    total_files = summary.get("total_files", 0)
+    model_error_files = summary.get("model_error_files", 0)
+    eval_error_files = summary.get("eval_error_files", 0)
+    payload[join_metric_name(log_prefix, "summary/model_error_rate")] = (
+        model_error_files / total_files if total_files else 0.0
+    )
+    payload[join_metric_name(log_prefix, "summary/eval_error_rate")] = (
+        eval_error_files / total_files if total_files else 0.0
+    )
 
     for split_task, item in summary.get("by_split_task", {}).items():
-        prefix = split_task.replace("/", "/")
+        prefix = join_metric_name(log_prefix, split_task.replace("/", "/"))
         payload["%s/total_files" % prefix] = item.get("total_files", 0)
         payload["%s/evaluated_files" % prefix] = item.get("evaluated_files", 0)
         payload["%s/model_error_files" % prefix] = item.get("model_error_files", 0)
@@ -80,7 +93,7 @@ def run(args: argparse.Namespace) -> None:
     swanlab.init(**init_kwargs)
     batch_evaluate_qa.run(args)
     summary = read_summary(args.output_root / "summary.json")
-    log_summary(swanlab, summary, step=args.swanlab_log_step)
+    log_summary(swanlab, summary, step=args.swanlab_log_step, log_prefix=args.swanlab_log_prefix)
     finish_swanlab(swanlab)
 
 
@@ -110,6 +123,11 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=DEFAULT_SWANLAB_LOG_STEP,
         help="Step used when logging aggregate evaluation metrics.",
+    )
+    parser.add_argument(
+        "--swanlab-log-prefix",
+        default=DEFAULT_SWANLAB_LOG_PREFIX,
+        help="Metric namespace prefix for evaluation logs. Default: eval.",
     )
     return parser.parse_args()
 

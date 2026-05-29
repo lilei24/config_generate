@@ -176,12 +176,14 @@ python3 inference/batch_evaluate_qa_swanlab.py \
   --swanlab-project config-generation \
   --swanlab-run-id <推理实验ID> \
   --swanlab-resume must \
-  --swanlab-log-step 999999
+  --swanlab-log-prefix eval
 ```
 
 `--swanlab-run-id` 可以在 SwanLab 实验 URL 的 `/runs/<exp_id>/`
 或实验的 Environment 页面中找到。传了 `--swanlab-run-id` 但不传
 `--swanlab-resume` 时，脚本默认使用 `must`，确保不会误开新实验。
+评估指标默认写到 `eval/...` 命名空间里，因此会和推理阶段的
+`sample/...`、`run/...` 分开显示。
 
 评估脚本会上传每个 split/task 的汇总：
 
