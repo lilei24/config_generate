@@ -30,7 +30,7 @@ from batch_infer_qa import (
     write_json,
 )
 from metric import evaluate_json
-from swanlab_utils import base_runtime_config, finish_swanlab, import_swanlab, make_text, metric_log_values
+from swanlab_utils import base_runtime_config, finish_swanlab, import_swanlab, metric_log_values
 
 
 DEFAULT_SWANLAB_PROJECT = "config-generation"
@@ -65,19 +65,6 @@ def log_sample(
         metric_payload["sample/metric_failed"] = 0
         metric_payload.update(metric_log_values(metrics, prefix="sample"))
     swanlab.log(metric_payload, step=index)
-
-
-def prediction_text(path: Path, model_output: Any, answer: Any) -> str:
-    model_output_text = json_text(model_output) if not isinstance(model_output, str) else model_output
-    return "【sample-file】\n%s\n\n【model-output】\n%s\n\n【answer】\n%s" % (
-        path.name,
-        model_output_text,
-        json_text(answer),
-    )
-
-
-def log_prediction(swanlab: Any, index: int, path: Path, model_output: Any, answer: Any) -> None:
-    swanlab.log({"sample/prediction": make_text(swanlab, prediction_text(path, model_output, answer))}, step=index)
 
 
 def log_running_eval(swanlab: Any, index: int, accumulator: Dict[str, Any]) -> None:
@@ -123,7 +110,6 @@ def run(args: argparse.Namespace) -> None:
             error_count += 1
             result = {"model-ouput": "", "answer": "", "error": error}
             append_jsonl(failure_log, {"file": str(path), "task": task_dir, "error": error})
-            log_prediction(swanlab, index, path, "", answer_value)
             log_sample(
                 swanlab=swanlab,
                 index=index,
@@ -151,7 +137,6 @@ def run(args: argparse.Namespace) -> None:
 
                 metrics = sample_metric(parsed_output, answer_value)
                 success_count += 1
-                log_prediction(swanlab, index, path, parsed_output, answer_value)
                 log_sample(
                     swanlab=swanlab,
                     index=index,
@@ -169,7 +154,6 @@ def run(args: argparse.Namespace) -> None:
                     "error": error,
                 }
                 append_jsonl(failure_log, {"file": str(path), "task": task_dir, "error": error})
-                log_prediction(swanlab, index, path, "", answer_value)
                 log_sample(
                     swanlab=swanlab,
                     index=index,

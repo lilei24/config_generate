@@ -63,13 +63,6 @@ def metric_log_values(metrics: Dict[str, Any], prefix: str = "") -> Dict[str, An
     }
 
 
-def make_text(swanlab: Any, text: str) -> Any:
-    text_cls = getattr(swanlab, "Text", None)
-    if text_cls is None:
-        raise RuntimeError("Current SwanLab package does not provide swanlab.Text.")
-    return text_cls(text)
-
-
 def finish_swanlab(swanlab: Any) -> None:
     finish = getattr(swanlab, "finish", None)
     if callable(finish):

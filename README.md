@@ -115,7 +115,6 @@ python3 inference/batch_infer_qa_swanlab.py \
 
 每个样本会上传：
 
-- `sample/prediction` 文本，包含 JSON 文件名、模型回答、`answer`
 - 样本级 `sample/field_path/precision`
 - 样本级 `sample/field_path/recall`
 - 样本级 `sample/field_path/f1`
