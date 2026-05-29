@@ -167,6 +167,22 @@ python3 inference/batch_evaluate_qa_swanlab.py \
   --swanlab-experiment qwen3-8b-evaluation
 ```
 
+如果要把评估指标补充到已有推理实验里，使用推理实验的 run id：
+
+```bash
+python3 inference/batch_evaluate_qa_swanlab.py \
+  --result-root inference-qwen3-8b \
+  --output-root metric-results/qwen3-8b \
+  --swanlab-project config-generation \
+  --swanlab-run-id <推理实验ID> \
+  --swanlab-resume must \
+  --swanlab-log-step 999999
+```
+
+`--swanlab-run-id` 可以在 SwanLab 实验 URL 的 `/runs/<exp_id>/`
+或实验的 Environment 页面中找到。传了 `--swanlab-run-id` 但不传
+`--swanlab-resume` 时，脚本默认使用 `must`，确保不会误开新实验。
+
 评估脚本会上传每个 split/task 的汇总：
 
 - `field_path`

@@ -24,13 +24,23 @@ from swanlab_utils import base_runtime_config, finish_swanlab, import_swanlab, m
 DEFAULT_SWANLAB_PROJECT = "config-generation"
 DEFAULT_SWANLAB_EXPERIMENT = "qwen3-8b-evaluation"
 DEFAULT_SWANLAB_MODE = "cloud"
+DEFAULT_SWANLAB_LOG_STEP = 0
 
 
 def read_summary(path: Path) -> Dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def log_summary(swanlab: Any, summary: Dict[str, Any]) -> None:
+def normalize_resume(value: str) -> Any:
+    lowered = value.lower()
+    if lowered == "true":
+        return True
+    if lowered == "false":
+        return False
+    return value
+
+
+def log_summary(swanlab: Any, summary: Dict[str, Any], step: int) -> None:
     payload: Dict[str, Any] = {
         "summary/total_files": summary.get("total_files", 0),
         "summary/evaluated_files": summary.get("evaluated_files", 0),
@@ -51,20 +61,26 @@ def log_summary(swanlab: Any, summary: Dict[str, Any]) -> None:
         if metrics:
             payload.update(metric_log_values(metrics, prefix=prefix))
 
-    swanlab.log(payload, step=0)
+    swanlab.log(payload, step=step)
 
 
 def run(args: argparse.Namespace) -> None:
     swanlab = import_swanlab()
-    swanlab.init(
-        project=args.swanlab_project,
-        experiment_name=args.swanlab_experiment,
-        mode=args.swanlab_mode,
-        config=base_runtime_config(args),
-    )
+    init_kwargs: Dict[str, Any] = {
+        "project": args.swanlab_project,
+        "experiment_name": args.swanlab_experiment,
+        "mode": args.swanlab_mode,
+        "config": base_runtime_config(args),
+    }
+    if args.swanlab_run_id:
+        init_kwargs["id"] = args.swanlab_run_id
+        init_kwargs["resume"] = normalize_resume(args.swanlab_resume or "must")
+    elif args.swanlab_resume:
+        init_kwargs["resume"] = normalize_resume(args.swanlab_resume)
+    swanlab.init(**init_kwargs)
     batch_evaluate_qa.run(args)
     summary = read_summary(args.output_root / "summary.json")
-    log_summary(swanlab, summary)
+    log_summary(swanlab, summary, step=args.swanlab_log_step)
     finish_swanlab(swanlab)
 
 
@@ -82,6 +98,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--swanlab-project", default=DEFAULT_SWANLAB_PROJECT)
     parser.add_argument("--swanlab-experiment", default=DEFAULT_SWANLAB_EXPERIMENT)
     parser.add_argument("--swanlab-mode", default=DEFAULT_SWANLAB_MODE)
+    parser.add_argument("--swanlab-run-id", default="", help="Existing SwanLab experiment ID to resume.")
+    parser.add_argument(
+        "--swanlab-resume",
+        default="",
+        choices=["", "must", "allow", "never", "true", "false"],
+        help="SwanLab resume mode. If --swanlab-run-id is set, default is must.",
+    )
+    parser.add_argument(
+        "--swanlab-log-step",
+        type=int,
+        default=DEFAULT_SWANLAB_LOG_STEP,
+        help="Step used when logging aggregate evaluation metrics.",
+    )
     return parser.parse_args()
 
 
