@@ -29,8 +29,9 @@ USER_PROMPT_TEMPLATE = """你是一个网络配置补全助手，给定一个网
 - 优先参考与目标节点直接相连的邻居节点中的语义相似配置；
 - 不要输出解释、思考过程、额外文本；
 - 不要输出 <think>、</think> 或任何思维链内容；
-- 只输出目标配置的JSON, 不要输出其他内容。
+- 最终回答只输出目标配置的 JSON 对象本身，不要输出 Markdown 代码块，不要输出其他内容。
 【输出格式案例1】：
+```json
 "ap-ssids": {
     "global-https-redirect-enable": false,
     "globalWeChatEnable": false,
@@ -52,15 +53,22 @@ USER_PROMPT_TEMPLATE = """你是一个网络配置补全助手，给定一个网
         }
     ]
 }
+```
 【输出格式案例2】:
+```json
 "vty-business" : {
     "vty-screen-length": 24,
     "vty-time-out": 10
 }
+```
 【输入网络拓扑上下文】:
+```json
 {input_value}
+```
 【你需要补全的配置要求】:
+```text
 {question_value}
+```
 """
 
 
