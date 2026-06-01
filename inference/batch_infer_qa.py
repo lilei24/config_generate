@@ -191,7 +191,7 @@ def run(args: argparse.Namespace) -> None:
     print("[infer] start: %s files" % len(qa_files), flush=True)
     started_at = time.time()
     failure_log = args.output_root / args.split / "failures.jsonl"
-    if failure_log.exists() and not args.append_failures:
+    if failure_log.exists():
         failure_log.unlink()
 
     for index, (task_dir, path) in enumerate(qa_files, start=1):
@@ -252,7 +252,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--progress-interval", type=int, default=DEFAULT_PROGRESS_INTERVAL)
     parser.add_argument("--limit", type=int, default=0, help="Only run first N files. 0 means all.")
     parser.add_argument("--enable-thinking", action="store_true", help="Do not disable Qwen thinking in extra_body.")
-    parser.add_argument("--append-failures", action="store_true", help="Append to existing failures.jsonl.")
     return parser.parse_args()
 
 

@@ -131,7 +131,7 @@ def run(args: argparse.Namespace) -> None:
     swanlab.log({"run/total_files": len(qa_files)}, step=0)
     started_at = time.time()
     failure_log = args.output_root / args.split / "failures.jsonl"
-    if failure_log.exists() and not args.append_failures:
+    if failure_log.exists():
         failure_log.unlink()
 
     success_count = 0
@@ -238,7 +238,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--system-prompt", default=DEFAULT_SYSTEM_PROMPT)
     parser.add_argument("--progress-interval", type=int, default=DEFAULT_PROGRESS_INTERVAL)
     parser.add_argument("--limit", type=int, default=0, help="Only run first N files. 0 means all.")
-    parser.add_argument("--append-failures", action="store_true", help="Append to existing failures.jsonl.")
     parser.add_argument(
         "--no-disable-thinking-extra-body",
         action="store_true",
