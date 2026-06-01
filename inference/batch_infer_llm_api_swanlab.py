@@ -7,7 +7,7 @@ import argparse
 import json
 import time
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from batch_evaluate_qa import add_metric, empty_metric_accumulator, finalize_accumulator
 from batch_infer_qa import (
@@ -25,7 +25,15 @@ from batch_infer_qa import (
     write_json,
 )
 from metric import evaluate_json
-from swanlab_utils import base_runtime_config, finish_swanlab, import_swanlab, metric_log_values
+from swanlab_utils import (
+    base_runtime_config,
+    finish_swanlab,
+    import_swanlab,
+    make_table,
+    metric_log_values,
+    sample_table_headers,
+    sample_table_row,
+)
 
 
 DEFAULT_BASE_URL = "http://10.246.114.119:9000/v1"
@@ -37,6 +45,7 @@ DEFAULT_SWANLAB_PROJECT = "config-generation"
 DEFAULT_SWANLAB_EXPERIMENT = "qwen3_6-27b-api-inference"
 DEFAULT_SWANLAB_MODE = "cloud"
 DEFAULT_SYSTEM_PROMPT = "你是个智能助手"
+DEFAULT_SAMPLE_TABLE_LOG_INTERVAL = 50
 
 
 def json_text(value: Any) -> str:
@@ -97,6 +106,11 @@ def log_running_eval(swanlab: Any, index: int, accumulator: Dict[str, Any]) -> N
     swanlab.log(metric_log_values(metrics, prefix="eval"), step=index)
 
 
+def log_sample_table(swanlab: Any, rows: List[List[Any]], step: int) -> None:
+    table = make_table(swanlab, sample_table_headers(), rows)
+    swanlab.log({"sample/table": table}, step=step)
+
+
 def run(args: argparse.Namespace) -> None:
     swanlab = import_swanlab()
     swanlab.init(
@@ -123,6 +137,7 @@ def run(args: argparse.Namespace) -> None:
     success_count = 0
     error_count = 0
     eval_accumulator = empty_metric_accumulator()
+    sample_rows: List[List[Any]] = []
     for index, (task_dir, path) in enumerate(qa_files, start=1):
         out_path = result_path(args.output_root, args.split, task_dir, args.qa_root, path)
         data, error = load_qa(path)
@@ -133,6 +148,7 @@ def run(args: argparse.Namespace) -> None:
             error_count += 1
             result = {"model-ouput": "", "answer": "", "error": error}
             append_jsonl(failure_log, {"file": str(path), "task": task_dir, "error": error})
+            sample_rows.append(sample_table_row(index, path.name, "", answer_value, False, error, metrics))
             log_sample(swanlab=swanlab, index=index, metrics=metrics, error=error)
         else:
             prompt, answer_value = build_user_prompt(data)
@@ -156,6 +172,18 @@ def run(args: argparse.Namespace) -> None:
 
                 metrics = sample_metric(parsed_output, answer_value)
                 success_count += 1
+                model_returned = not bool(parse_error)
+                sample_rows.append(
+                    sample_table_row(
+                        index,
+                        path.name,
+                        parsed_output if model_returned else raw_output,
+                        answer_value,
+                        model_returned,
+                        "model-output-parse-error: %s" % parse_error if parse_error else "",
+                        metrics if model_returned else {},
+                    )
+                )
                 log_sample(swanlab=swanlab, index=index, metrics=metrics, error=parse_error)
                 if "error" not in metrics:
                     add_metric(eval_accumulator, metrics)
@@ -168,6 +196,7 @@ def run(args: argparse.Namespace) -> None:
                     "error": error,
                 }
                 append_jsonl(failure_log, {"file": str(path), "task": task_dir, "error": error})
+                sample_rows.append(sample_table_row(index, path.name, "", answer_value, False, error, metrics))
                 log_sample(swanlab=swanlab, index=index, metrics=metrics, error=error)
 
         write_json(out_path, result)
@@ -181,6 +210,10 @@ def run(args: argparse.Namespace) -> None:
             step=index,
         )
         log_running_eval(swanlab, index, eval_accumulator)
+        if args.sample_table_log_interval > 0 and (
+            index % args.sample_table_log_interval == 0 or index == len(qa_files)
+        ):
+            log_sample_table(swanlab, sample_rows, step=index)
         if args.progress_interval > 0 and (index % args.progress_interval == 0 or index == len(qa_files)):
             print_progress(index, len(qa_files), started_at)
 
@@ -214,6 +247,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--swanlab-project", default=DEFAULT_SWANLAB_PROJECT)
     parser.add_argument("--swanlab-experiment", default=DEFAULT_SWANLAB_EXPERIMENT)
     parser.add_argument("--swanlab-mode", default=DEFAULT_SWANLAB_MODE)
+    parser.add_argument(
+        "--sample-table-log-interval",
+        type=int,
+        default=DEFAULT_SAMPLE_TABLE_LOG_INTERVAL,
+        help="Log accumulated sample table every N files. 0 disables table logging.",
+    )
     return parser.parse_args()
 
 

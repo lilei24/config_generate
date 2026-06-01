@@ -115,6 +115,7 @@ python3 inference/batch_infer_qa_swanlab.py \
 
 每个样本会上传：
 
+- `sample/table` 表格，包含每个 step 的文件名、模型输出、答案、模型返回状态、错误原因和单样本指标
 - 样本级 `sample/field_path/precision`
 - 样本级 `sample/field_path/recall`
 - 样本级 `sample/field_path/f1`
@@ -128,6 +129,11 @@ python3 inference/batch_infer_qa_swanlab.py \
 - 截至当前 step 的累计指标 `eval/leaf_triple/*`
 - 截至当前 step 的累计指标 `eval/value_accuracy/accuracy`
 - 截至当前 step 的累计指标 `eval/hallucination_missing/*`
+
+`sample/table` 默认每 50 个样本更新一次，最后一个样本会再更新一次。
+可以通过 `--sample-table-log-interval` 调整；设为 `0` 可关闭表格上传。
+如果模型请求失败、样本读取失败、服务报错，或模型输出无法解析成 JSON，
+表格中的 `model_returned` 会记为 `False`，`error_reason` 会记录原因。
 
 远程 LLM API 版本：
 
