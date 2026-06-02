@@ -70,6 +70,7 @@ class TokenRow:
     token_count: int
     char_count: int
     byte_count: int
+    node_count: int
     status: str
     detail: str = ""
 
@@ -153,16 +154,24 @@ def token_count(text: str, tokenizer: str) -> int:
     raise ValueError("unsupported tokenizer: %s" % tokenizer)
 
 
-def load_sample_field(path: Path, field: str) -> Tuple[Any, str]:
+def input_node_count(sample: Dict[str, Any]) -> int:
+    input_value = sample.get("input")
+    if not isinstance(input_value, dict):
+        return 0
+    nodes = input_value.get("nodes")
+    return len(nodes) if isinstance(nodes, list) else 0
+
+
+def load_sample_field(path: Path, field: str) -> Tuple[Any, int, str]:
     try:
         sample = json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:  # noqa: BLE001 - 统计脚本需要跳过坏文件并记录。
-        return None, "bad_json: %s" % exc
+        return None, 0, "bad_json: %s" % exc
     if not isinstance(sample, dict):
-        return None, "sample_not_object"
+        return None, 0, "sample_not_object"
     if field not in sample:
-        return None, "missing_field: %s" % field
-    return sample[field], ""
+        return None, input_node_count(sample), "missing_field: %s" % field
+    return sample[field], input_node_count(sample), ""
 
 
 def collect_rows(
@@ -183,10 +192,10 @@ def collect_rows(
             print("[token] 0/0 files (100.00%), elapsed 0.0s, 0.00 files/s, eta 0.0s", flush=True)
 
     for file_index, (split, task, path) in enumerate(qa_files, start=1):
-        value, error = load_sample_field(path, field)
+        value, node_count, error = load_sample_field(path, field)
         file_name = str(path.relative_to(qa_root))
         if error:
-            rows.append(TokenRow(split, task, file_name, 0, 0, 0, "error", error))
+            rows.append(TokenRow(split, task, file_name, 0, 0, 0, node_count, "error", error))
         else:
             text = stable_json_text(value)
             rows.append(
@@ -197,6 +206,7 @@ def collect_rows(
                     token_count=token_count(text, tokenizer),
                     char_count=len(text),
                     byte_count=len(text.encode("utf-8")),
+                    node_count=node_count,
                     status="ok",
                 )
             )
@@ -292,6 +302,7 @@ def build_summary(rows: List[TokenRow], qa_root: Path, field: str, tokenizer: st
         "token_count": number_summary([row.token_count for row in ok_rows]),
         "char_count": number_summary([row.char_count for row in ok_rows]),
         "byte_count": number_summary([row.byte_count for row in ok_rows]),
+        "node_count": number_summary([row.node_count for row in ok_rows]),
         "groups": {},
     }
 
@@ -303,7 +314,10 @@ def build_summary(rows: List[TokenRow], qa_root: Path, field: str, tokenizer: st
 
     group_summary: Dict[str, Any] = {}
     for group_name, group_rows in sorted(groups.items()):
-        group_summary[group_name] = number_summary([row.token_count for row in group_rows])
+        group_summary[group_name] = {
+            "token_count": number_summary([row.token_count for row in group_rows]),
+            "node_count": number_summary([row.node_count for row in group_rows]),
+        }
     summary["groups"] = group_summary
     return summary
 
@@ -356,6 +370,8 @@ def group_rows(rows: List[TokenRow]) -> List[Dict[str, Any]]:
         stats = number_summary([row.token_count for row in group])
         output_row: Dict[str, Any] = {"split": split, "task": task}
         output_row.update(stats)
+        node_stats = number_summary([row.node_count for row in group])
+        output_row.update({"node_%s" % key: value for key, value in node_stats.items()})
         output_rows.append(output_row)
     return output_rows
 
@@ -365,7 +381,17 @@ def write_rows_csv(path: Path, rows: List[TokenRow]) -> None:
     with path.open("w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(
             fh,
-            fieldnames=["split", "task", "file", "token_count", "char_count", "byte_count", "status", "detail"],
+            fieldnames=[
+                "split",
+                "task",
+                "file",
+                "token_count",
+                "char_count",
+                "byte_count",
+                "node_count",
+                "status",
+                "detail",
+            ],
         )
         writer.writeheader()
         for row in sorted(rows, key=lambda item: (item.split, item.task, item.file)):
@@ -377,19 +403,20 @@ def write_rows_csv(path: Path, rows: List[TokenRow]) -> None:
                     "token_count": row.token_count,
                     "char_count": row.char_count,
                     "byte_count": row.byte_count,
+                    "node_count": row.node_count,
                     "status": row.status,
                     "detail": row.detail,
                 }
             )
 
 
-def write_histogram_csv(path: Path, bins: List[Tuple[str, int]]) -> None:
+def write_histogram_csv(path: Path, bins: List[Tuple[str, int]], bin_field: str = "token_count_bin") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=["token_count_bin", "sample_count"])
+        writer = csv.DictWriter(fh, fieldnames=[bin_field, "sample_count"])
         writer.writeheader()
         for label, count in bins:
-            writer.writerow({"token_count_bin": label, "sample_count": count})
+            writer.writerow({bin_field: label, "sample_count": count})
 
 
 def write_dict_rows_csv(path: Path, rows: List[Dict[str, Any]], fieldnames: List[str]) -> None:
@@ -401,7 +428,7 @@ def write_dict_rows_csv(path: Path, rows: List[Dict[str, Any]], fieldnames: List
             writer.writerow(row)
 
 
-def write_histogram_svg(path: Path, bins: List[Tuple[str, int]], title: str) -> None:
+def write_histogram_svg(path: Path, bins: List[Tuple[str, int]], title: str, x_label: str = "input token count") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     width = 1200
     height = 720
@@ -424,7 +451,8 @@ def write_histogram_svg(path: Path, bins: List[Tuple[str, int]], title: str) -> 
         '<line x1="%s" y1="%s" x2="%s" y2="%s" stroke="#222"/>' % (margin_left, margin_top, margin_left, margin_top + plot_height),
         '<text x="%s" y="%s" font-size="12" font-family="Arial">%s</text>' % (margin_left - 55, margin_top + 10, max_count),
         '<text x="%s" y="%s" font-size="12" font-family="Arial">0</text>' % (margin_left - 20, margin_top + plot_height + 4),
-        '<text x="%s" y="%s" text-anchor="middle" font-size="16" font-family="Arial">input token count</text>' % (width / 2, height - 20),
+        '<text x="%s" y="%s" text-anchor="middle" font-size="16" font-family="Arial">%s</text>'
+        % (width / 2, height - 20, escape(x_label)),
         '<text x="20" y="%s" transform="rotate(-90 20 %s)" text-anchor="middle" font-size="16" font-family="Arial">sample count</text>' % (height / 2, height / 2),
     ]
 
@@ -441,6 +469,70 @@ def write_histogram_svg(path: Path, bins: List[Tuple[str, int]], title: str) -> 
                 '<text x="%.2f" y="%s" transform="rotate(45 %.2f %s)" text-anchor="start" font-size="10" font-family="Arial">%s</text>'
                 % (label_x, label_y, label_x, label_y, escape(label))
             )
+    parts.append("</svg>")
+    path.write_text("\n".join(parts), encoding="utf-8")
+
+
+def write_token_node_scatter_csv(path: Path, rows: List[TokenRow]) -> None:
+    valid_rows = ok_rows(rows)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=["split", "task", "file", "node_count", "token_count"])
+        writer.writeheader()
+        for row in sorted(valid_rows, key=lambda item: (item.split, item.task, item.file)):
+            writer.writerow(
+                {
+                    "split": row.split,
+                    "task": row.task,
+                    "file": row.file,
+                    "node_count": row.node_count,
+                    "token_count": row.token_count,
+                }
+            )
+
+
+def write_token_node_scatter_svg(path: Path, rows: List[TokenRow], title: str) -> None:
+    valid_rows = ok_rows(rows)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    width = 1200
+    height = 720
+    margin_left = 90
+    margin_right = 35
+    margin_top = 70
+    margin_bottom = 90
+    plot_width = width - margin_left - margin_right
+    plot_height = height - margin_top - margin_bottom
+    max_nodes = max((row.node_count for row in valid_rows), default=1)
+    max_tokens = max((row.token_count for row in valid_rows), default=1)
+
+    parts = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<svg xmlns="http://www.w3.org/2000/svg" width="%s" height="%s" viewBox="0 0 %s %s">' % (width, height, width, height),
+        '<rect width="100%" height="100%" fill="white"/>',
+        '<text x="%s" y="32" text-anchor="middle" font-size="24" font-family="Arial">%s</text>' % (width / 2, escape(title)),
+        '<line x1="%s" y1="%s" x2="%s" y2="%s" stroke="#222"/>'
+        % (margin_left, margin_top + plot_height, width - margin_right, margin_top + plot_height),
+        '<line x1="%s" y1="%s" x2="%s" y2="%s" stroke="#222"/>'
+        % (margin_left, margin_top, margin_left, margin_top + plot_height),
+        '<text x="%s" y="%s" text-anchor="middle" font-size="16" font-family="Arial">node count</text>'
+        % (width / 2, height - 24),
+        '<text x="20" y="%s" transform="rotate(-90 20 %s)" text-anchor="middle" font-size="16" font-family="Arial">input token count</text>'
+        % (height / 2, height / 2),
+        '<text x="%s" y="%s" font-size="12" font-family="Arial">0</text>' % (margin_left - 20, margin_top + plot_height + 4),
+        '<text x="%s" y="%s" font-size="12" font-family="Arial">%s</text>' % (width - margin_right - 60, margin_top + plot_height + 20, max_nodes),
+        '<text x="%s" y="%s" font-size="12" font-family="Arial">%s</text>' % (margin_left - 70, margin_top + 5, max_tokens),
+    ]
+
+    for row in valid_rows:
+        x = margin_left + (row.node_count / max_nodes) * plot_width if max_nodes else margin_left
+        y = margin_top + plot_height - (row.token_count / max_tokens) * plot_height if max_tokens else margin_top + plot_height
+        color = "#4C78A8" if row.task == "node" else "#F58518"
+        parts.append('<circle cx="%.2f" cy="%.2f" r="3" fill="%s" fill-opacity="0.45"/>' % (x, y, color))
+
+    parts.append('<circle cx="%s" cy="%s" r="5" fill="#4C78A8" fill-opacity="0.7"/>' % (width - 190, margin_top + 15))
+    parts.append('<text x="%s" y="%s" font-size="12" font-family="Arial">node_config_qa</text>' % (width - 180, margin_top + 19))
+    parts.append('<circle cx="%s" cy="%s" r="5" fill="#F58518" fill-opacity="0.7"/>' % (width - 190, margin_top + 35))
+    parts.append('<text x="%s" y="%s" font-size="12" font-family="Arial">device_config_qa</text>' % (width - 180, margin_top + 39))
     parts.append("</svg>")
     path.write_text("\n".join(parts), encoding="utf-8")
 
@@ -519,13 +611,24 @@ def analyze(
 ) -> None:
     rows = collect_rows(qa_root, splits, field, tokenizer, progress_interval)
     ok_token_counts = [row.token_count for row in rows if row.status == "ok"]
+    ok_node_counts = [row.node_count for row in rows if row.status == "ok"]
     hist_bins = histogram_bins(ok_token_counts, bins)
+    node_hist_bins = histogram_bins(ok_node_counts, bins)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     write_rows_csv(output_dir / "qa_input_token_counts.csv", rows)
     write_top_longest(output_dir / "qa_input_token_top_longest.csv", rows, 100)
     write_histogram_csv(output_dir / "qa_input_token_histogram.csv", hist_bins)
     write_histogram_svg(output_dir / "qa_input_token_histogram.svg", hist_bins, "QA Input Token Distribution")
+    write_histogram_csv(output_dir / "qa_input_node_count_histogram.csv", node_hist_bins, "node_count_bin")
+    write_histogram_svg(
+        output_dir / "qa_input_node_count_histogram.svg",
+        node_hist_bins,
+        "QA Input Node Count Distribution",
+        "input node count",
+    )
+    write_token_node_scatter_csv(output_dir / "qa_input_token_node_scatter.csv", rows)
+    write_token_node_scatter_svg(output_dir / "qa_input_token_node_scatter.svg", rows, "QA Input Tokens vs Node Count")
     write_cdf_svg(output_dir / "qa_input_token_cdf.svg", ok_token_counts, "QA Input Token CDF")
     write_dict_rows_csv(
         output_dir / "qa_input_token_context_thresholds.csv",
@@ -540,7 +643,28 @@ def analyze(
     write_dict_rows_csv(
         output_dir / "qa_input_token_task_summary.csv",
         group_rows(rows),
-        ["split", "task", "count", "min", "max", "mean", "median", "p75", "p90", "p95", "p99"],
+        [
+            "split",
+            "task",
+            "count",
+            "min",
+            "max",
+            "mean",
+            "median",
+            "p75",
+            "p90",
+            "p95",
+            "p99",
+            "node_count",
+            "node_min",
+            "node_max",
+            "node_mean",
+            "node_median",
+            "node_p75",
+            "node_p90",
+            "node_p95",
+            "node_p99",
+        ],
     )
     (output_dir / "qa_input_token_summary.json").write_text(
         json.dumps(build_summary(rows, qa_root, field, tokenizer), ensure_ascii=False, indent=2) + "\n",
