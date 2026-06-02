@@ -161,6 +161,21 @@ python3 inference/batch_infer_llm_api_swanlab.py \
 --no-disable-thinking-extra-body
 ```
 
+## 只预测 Value 的推理
+
+如果目标配置的所有 key 已知，只需要模型预测 value，可以使用 mask-value
+版本入口：
+
+```bash
+python3 inference/batch_infer_qa_mask_value.py
+python3 inference/batch_infer_qa_swanlab_mask_value.py
+python3 inference/batch_infer_llm_api_swanlab_mask_value.py
+```
+
+这些脚本会从每个 QA 文件的 `output` 中提取完整 key 骨架，把所有叶子
+value 替换为 `<VALUE_TO_PREDICT>` 后放进 prompt。模型仍然需要输出完整
+JSON 对象，但不能新增、删除、重命名任何 key。
+
 带 SwanLab 记录的评估：
 
 ```bash
