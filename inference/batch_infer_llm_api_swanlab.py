@@ -46,6 +46,7 @@ DEFAULT_SWANLAB_EXPERIMENT = "qwen3_6-27b-api-inference"
 DEFAULT_SWANLAB_MODE = "cloud"
 DEFAULT_SYSTEM_PROMPT = "你是个智能助手"
 DEFAULT_SAMPLE_TABLE_LOG_INTERVAL = 50
+DEFAULT_POST_RESPONSE_WAIT_SECONDS = 5.0
 
 
 def json_text(value: Any) -> str:
@@ -74,6 +75,7 @@ def chat_completion(
             {"role": "user", "content": prompt},
         ],
         "temperature": temperature,
+        "stream": False,
     }
     if disable_thinking_extra_body:
         kwargs["extra_body"] = {"chat_template_kwargs": {"enable_thinking": False}}
@@ -216,6 +218,8 @@ def run(args: argparse.Namespace) -> None:
             log_sample_table(swanlab, sample_rows, step=index)
         if args.progress_interval > 0 and (index % args.progress_interval == 0 or index == len(qa_files)):
             print_progress(index, len(qa_files), started_at)
+        if args.post_response_wait_seconds > 0 and index < len(qa_files):
+            time.sleep(args.post_response_wait_seconds)
 
     print("[infer-api-swanlab] done. results: %s" % args.output_root, flush=True)
     finish_swanlab(swanlab)
@@ -237,6 +241,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--temperature", type=float, default=DEFAULT_TEMPERATURE)
     parser.add_argument("--system-prompt", default=DEFAULT_SYSTEM_PROMPT)
     parser.add_argument("--progress-interval", type=int, default=DEFAULT_PROGRESS_INTERVAL)
+    parser.add_argument(
+        "--post-response-wait-seconds",
+        type=float,
+        default=DEFAULT_POST_RESPONSE_WAIT_SECONDS,
+        help="Wait N seconds after each processed sample before sending the next request. Default: 5.",
+    )
     parser.add_argument("--limit", type=int, default=0, help="Only run first N files. 0 means all.")
     parser.add_argument(
         "--no-disable-thinking-extra-body",
