@@ -144,15 +144,21 @@ def run(args: argparse.Namespace) -> None:
         out_path = result_path(args.output_root, args.split, task_dir, args.qa_root, path)
         data, error = load_qa(path)
         answer_value: Any = ""
+        prompt_value: Any = ""
+        input_value: Any = ""
         metrics: Dict[str, Any] = {}
 
         if error:
             error_count += 1
             result = {"model-ouput": "", "answer": "", "error": error}
             append_jsonl(failure_log, {"file": str(path), "task": task_dir, "error": error})
-            sample_rows.append(sample_table_row(index, path.name, "", answer_value, False, error, metrics))
+            sample_rows.append(
+                sample_table_row(index, path.name, prompt_value, input_value, "", answer_value, False, error, metrics)
+            )
             log_sample(swanlab=swanlab, index=index, metrics=metrics, error=error)
         else:
+            prompt_value = data["prompt"]
+            input_value = data["input"]
             prompt, answer_value = build_user_prompt(data)
             try:
                 raw_output = chat_completion(
@@ -179,6 +185,8 @@ def run(args: argparse.Namespace) -> None:
                     sample_table_row(
                         index,
                         path.name,
+                        prompt_value,
+                        input_value,
                         parsed_output if model_returned else raw_output,
                         answer_value,
                         model_returned,
@@ -198,7 +206,19 @@ def run(args: argparse.Namespace) -> None:
                     "error": error,
                 }
                 append_jsonl(failure_log, {"file": str(path), "task": task_dir, "error": error})
-                sample_rows.append(sample_table_row(index, path.name, "", answer_value, False, error, metrics))
+                sample_rows.append(
+                    sample_table_row(
+                        index,
+                        path.name,
+                        prompt_value,
+                        input_value,
+                        "",
+                        answer_value,
+                        False,
+                        error,
+                        metrics,
+                    )
+                )
                 log_sample(swanlab=swanlab, index=index, metrics=metrics, error=error)
 
         write_json(out_path, result)

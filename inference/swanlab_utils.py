@@ -67,6 +67,8 @@ def sample_table_headers() -> list[str]:
     return [
         "step",
         "sample_filename",
+        "prompt",
+        "input",
         "model-output",
         "answer",
         "model_returned",
@@ -86,6 +88,8 @@ def sample_table_headers() -> list[str]:
 def sample_table_row(
     step: int,
     sample_filename: str,
+    prompt: Any,
+    input_value: Any,
     model_output: Any,
     answer: Any,
     model_returned: bool,
@@ -99,6 +103,8 @@ def sample_table_row(
     return [
         step,
         sample_filename,
+        json_dumps(prompt),
+        json_dumps(input_value),
         json_dumps(model_output),
         json_dumps(answer),
         bool(model_returned),
