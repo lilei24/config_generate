@@ -397,7 +397,21 @@ def group_rows(
         grouped[(row["split"], row["task"], str(group_name), lower, upper)].append(row)
 
     output: List[Dict[str, Any]] = []
-    for (split, task, group_name, lower, upper), group_items in sorted(grouped.items()):
+    def group_sort_key(
+        item: Tuple[Tuple[str, str, str, int, int], List[Dict[str, Any]]],
+    ) -> Tuple[Any, ...]:
+        split, task, group_name, lower, upper = item[0]
+        # 数值分桶按下界从小到大排列；精确字符串分组的上下界都是 -1，
+        # 因此继续按名称排序。最后一个 ``>最大阈值`` 桶的 lower 最大，
+        # 会自然排在所有有限区间之后。
+        if lower == -1 and upper == -1:
+            return split, task, 0, group_name
+        return split, task, 1, lower, upper, group_name
+
+    for (split, task, group_name, lower, upper), group_items in sorted(
+        grouped.items(),
+        key=group_sort_key,
+    ):
         accumulator = empty_metric_accumulator()
         for item in group_items:
             if item["status"] == "ok":
