@@ -503,7 +503,7 @@ def group_rows_by_top_level_key(
                 "task": task,
                 "target_top_level_key": top_key,
                 "factor": factor,
-                "group": group_name,
+                "group": "%s | %s" % (top_key, group_name),
                 "range_min_exclusive": lower,
                 "range_max_inclusive": upper,
                 "total_files": len(group_items),
