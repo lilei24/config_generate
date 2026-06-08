@@ -85,6 +85,22 @@ GROUP_FIELDS = [
 ] + METRIC_FIELDS
 
 
+TOP_KEY_GROUP_FIELDS = [
+    "split",
+    "task",
+    "target_top_level_key",
+    "factor",
+    "group",
+    "range_min_exclusive",
+    "range_max_inclusive",
+    "total_files",
+    "evaluated_files",
+    "model_error_files",
+    "eval_error_files",
+    "error_rate",
+] + METRIC_FIELDS
+
+
 PATH_DETAIL_FIELDS = [
     "split",
     "task",
@@ -444,6 +460,63 @@ def group_rows(
     return output
 
 
+def group_rows_by_top_level_key(
+    rows: List[Dict[str, Any]],
+    factor: str,
+    grouper: Any,
+) -> List[Dict[str, Any]]:
+    grouped: DefaultDict[Tuple[str, str, str, str, int, int], List[Dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        group_name, lower, upper = grouper(row)
+        top_key = str(row.get("target_top_level_key", ""))
+        grouped[(row["split"], row["task"], top_key, str(group_name), lower, upper)].append(row)
+
+    def group_sort_key(
+        item: Tuple[Tuple[str, str, str, str, int, int], List[Dict[str, Any]]],
+    ) -> Tuple[Any, ...]:
+        split, task, top_key, group_name, lower, upper = item[0]
+        if lower == -1 and upper == -1:
+            return split, task, top_key, 0, group_name
+        return split, task, top_key, 1, lower, upper, group_name
+
+    output: List[Dict[str, Any]] = []
+    for (split, task, top_key, group_name, lower, upper), group_items in sorted(
+        grouped.items(),
+        key=group_sort_key,
+    ):
+        accumulator = empty_metric_accumulator()
+        for item in group_items:
+            if item["status"] == "ok":
+                add_metric(accumulator, item["_metric"])
+        evaluated = sum(1 for item in group_items if item["status"] == "ok")
+        model_errors = sum(1 for item in group_items if item["status"] == "model_error")
+        eval_errors = sum(1 for item in group_items if item["status"] == "eval_error")
+        if evaluated:
+            aggregate_metric = finalize_accumulator(accumulator)
+            metric_values = metric_row_values(aggregate_metric)
+            metric_values["top_level_exact_match"] = aggregate_metric["top_level_config"]["exact_match_rate"]
+        else:
+            metric_values = empty_metric_values()
+        output.append(
+            {
+                "split": split,
+                "task": task,
+                "target_top_level_key": top_key,
+                "factor": factor,
+                "group": group_name,
+                "range_min_exclusive": lower,
+                "range_max_inclusive": upper,
+                "total_files": len(group_items),
+                "evaluated_files": evaluated,
+                "model_error_files": model_errors,
+                "eval_error_files": eval_errors,
+                "error_rate": (model_errors + eval_errors) / len(group_items) if group_items else 0.0,
+                **metric_values,
+            }
+        )
+    return output
+
+
 def exact_grouper(field: str) -> Any:
     return lambda row: (row.get(field, ""), -1, -1)
 
@@ -546,6 +619,23 @@ def strip_internal_fields(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return [{key: value for key, value in row.items() if not key.startswith("_")} for row in rows]
 
 
+def remove_deprecated_outputs(output_root: Path) -> None:
+    deprecated_names = [
+        "answer_path_key_metrics.csv",
+        "answer_path_key_metrics.svg",
+        "answer_path_single_occurrence_metrics.csv",
+        "answer_path_single_occurrence_metrics.svg",
+        "target_node_visible_top_key_count_metrics.csv",
+        "target_node_visible_top_key_count_metrics.svg",
+        "all_nodes_visible_top_key_count_metrics.csv",
+        "all_nodes_visible_top_key_count_metrics.svg",
+    ]
+    for name in deprecated_names:
+        path = output_root / name
+        if path.exists() and path.is_file():
+            path.unlink()
+
+
 def run(args: argparse.Namespace) -> None:
     rows, path_detail_rows = collect_rows(args)
     path_bins = parse_int_csv(args.path_occurrence_bins)
@@ -558,14 +648,19 @@ def run(args: argparse.Namespace) -> None:
         "answer_path_occurrence_total",
         numeric_bin_grouper("answer_path_occurrence_total", path_bins),
     )
+    top_key_path_occurrence_rows = group_rows_by_top_level_key(
+        rows,
+        "answer_path_occurrence_total",
+        numeric_bin_grouper("answer_path_occurrence_total", path_bins),
+    )
     node_count_rows = group_rows(rows, "input_node_count", numeric_bin_grouper("input_node_count", node_bins))
     node_task_rows = [row for row in rows if row["task"] == "node_config_qa"]
-    target_key_count_rows = group_rows(
+    target_key_count_rows = group_rows_by_top_level_key(
         node_task_rows,
         "target_node_visible_top_key_count",
         numeric_bin_grouper("target_node_visible_top_key_count", key_bins),
     )
-    all_key_count_rows = group_rows(
+    all_key_count_rows = group_rows_by_top_level_key(
         node_task_rows,
         "all_nodes_visible_top_key_count",
         numeric_bin_grouper("all_nodes_visible_top_key_count", key_bins),
@@ -583,18 +678,9 @@ def run(args: argparse.Namespace) -> None:
                 "_metric": sample.get("_metric"),
             }
         )
-    answer_path_key_rows = group_rows(
-        enriched_path_detail_rows,
-        "answer_path",
-        exact_grouper("answer_path"),
-    )
-    answer_path_single_occurrence_rows = group_rows(
-        enriched_path_detail_rows,
-        "input_occurrence_count",
-        numeric_bin_grouper("input_occurrence_count", path_bins),
-    )
 
     output_root = args.output_root
+    remove_deprecated_outputs(output_root)
     write_csv(output_root / "per_file_factor_metrics.csv", strip_internal_fields(rows), SAMPLE_FIELDS)
     write_csv(
         output_root / "answer_path_input_occurrences.csv",
@@ -603,15 +689,22 @@ def run(args: argparse.Namespace) -> None:
     )
     write_csv(output_root / "top_level_key_metrics.csv", top_key_rows, GROUP_FIELDS)
     write_csv(output_root / "answer_path_occurrence_metrics.csv", path_occurrence_rows, GROUP_FIELDS)
-    write_csv(output_root / "answer_path_key_metrics.csv", answer_path_key_rows, GROUP_FIELDS)
     write_csv(
-        output_root / "answer_path_single_occurrence_metrics.csv",
-        answer_path_single_occurrence_rows,
-        GROUP_FIELDS,
+        output_root / "top_level_key_answer_path_occurrence_metrics.csv",
+        top_key_path_occurrence_rows,
+        TOP_KEY_GROUP_FIELDS,
     )
     write_csv(output_root / "node_count_metrics.csv", node_count_rows, GROUP_FIELDS)
-    write_csv(output_root / "target_node_visible_top_key_count_metrics.csv", target_key_count_rows, GROUP_FIELDS)
-    write_csv(output_root / "all_nodes_visible_top_key_count_metrics.csv", all_key_count_rows, GROUP_FIELDS)
+    write_csv(
+        output_root / "top_level_key_target_node_visible_top_key_count_metrics.csv",
+        target_key_count_rows,
+        TOP_KEY_GROUP_FIELDS,
+    )
+    write_csv(
+        output_root / "top_level_key_all_nodes_visible_top_key_count_metrics.csv",
+        all_key_count_rows,
+        TOP_KEY_GROUP_FIELDS,
+    )
 
     write_metric_svg(output_root / "top_level_key_metrics.svg", "Top-level key vs metrics", top_key_rows)
     write_metric_svg(
@@ -620,24 +713,19 @@ def run(args: argparse.Namespace) -> None:
         path_occurrence_rows,
     )
     write_metric_svg(
-        output_root / "answer_path_key_metrics.svg",
-        "Answer path key vs metrics",
-        answer_path_key_rows,
-    )
-    write_metric_svg(
-        output_root / "answer_path_single_occurrence_metrics.svg",
-        "Single answer path occurrence count vs metrics",
-        answer_path_single_occurrence_rows,
+        output_root / "top_level_key_answer_path_occurrence_metrics.svg",
+        "Top-level key: answer path occurrences in input vs metrics",
+        top_key_path_occurrence_rows,
     )
     write_metric_svg(output_root / "node_count_metrics.svg", "Input node count vs metrics", node_count_rows)
     write_metric_svg(
-        output_root / "target_node_visible_top_key_count_metrics.svg",
-        "Target node visible top-level key count vs metrics",
+        output_root / "top_level_key_target_node_visible_top_key_count_metrics.svg",
+        "Top-level key: target node visible top-level key count vs metrics",
         target_key_count_rows,
     )
     write_metric_svg(
-        output_root / "all_nodes_visible_top_key_count_metrics.svg",
-        "All nodes visible top-level key count vs metrics",
+        output_root / "top_level_key_all_nodes_visible_top_key_count_metrics.svg",
+        "Top-level key: all nodes visible top-level key count vs metrics",
         all_key_count_rows,
     )
 
@@ -651,8 +739,15 @@ def run(args: argparse.Namespace) -> None:
             "tasks": parse_csv_values(args.tasks),
             "array_mode": args.array_mode,
             "path_occurrence_definition": (
-                "For each answer field path, count input field paths whose key sequence ends with that answer path. "
-                "Array positions use []."
+                "For each sample, collect answer field paths and input field paths. "
+                "For every answer field path in that sample, count input field paths in the same sample whose key "
+                "sequence ends with that answer path. Array positions use []. "
+                "answer_path_occurrence_total is the sum of those per-answer-path counts inside one sample."
+            ),
+            "top_key_count_definition": (
+                "For node_config_qa only, locate the target node by metadata.target.node_id inside that sample's "
+                "input.nodes. Count visible top-level config keys in that target node and in all input nodes. "
+                "Grouping is then performed within each target_top_level_key."
             ),
             "total_files": len(rows),
             "evaluated_files": sum(1 for row in rows if row["status"] == "ok"),
@@ -665,11 +760,10 @@ def run(args: argparse.Namespace) -> None:
             "outputs": {
                 "top_level_key_groups": len(top_key_rows),
                 "answer_path_occurrence_groups": len(path_occurrence_rows),
-                "answer_path_key_groups": len(answer_path_key_rows),
-                "answer_path_single_occurrence_groups": len(answer_path_single_occurrence_rows),
+                "top_level_key_answer_path_occurrence_groups": len(top_key_path_occurrence_rows),
                 "node_count_groups": len(node_count_rows),
-                "target_node_visible_top_key_count_groups": len(target_key_count_rows),
-                "all_nodes_visible_top_key_count_groups": len(all_key_count_rows),
+                "top_level_key_target_node_visible_top_key_count_groups": len(target_key_count_rows),
+                "top_level_key_all_nodes_visible_top_key_count_groups": len(all_key_count_rows),
             },
         },
     )
