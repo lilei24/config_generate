@@ -20,13 +20,43 @@ DEFAULT_TEMPERATURE = 0.2
 DEFAULT_PROGRESS_INTERVAL = 50
 
 
+# 在这里填写“目标顶层配置 Key -> 常见 JSON 结构”。
+#
+# 每个顶层 Key 对应一个“完整目标 JSON 对象”列表，用于配置一个或多个常见
+# 结构。结构中的值只是用于提示类型和层级的占位示例，不会参与答案评估。例如：
+#
+# TOP_LEVEL_KEY_STRUCTURE_HINTS = {
+#     "your-top-level-key": [
+#         {
+#             "your-top-level-key": {
+#                 "enable": "<boolean>",
+#                 "items": [
+#                     {
+#                         "name": "<string>",
+#                         "priority": "<number>",
+#                     }
+#                 ],
+#             }
+#         }
+#     ],
+# }
+#
+# 当前先留空。没有配置结构提示的顶层 Key 会在 Prompt 中明确显示“未提供”。
+TOP_LEVEL_KEY_STRUCTURE_HINTS: Dict[str, Any] = {}
+
+
 USER_PROMPT_TEMPLATE = """你是一个网络配置补全助手，给定一个网络拓扑上下文，其中包含：
 1.deviceGroups: 设备组级别的信息和配置。
 2.nodes: 节点级别的信息和配置。
 3.links: 节点之间的连接关系
 你的任务是根据上下文，为目标设备补全缺失的配置对象。
 【推理规则】：
-- 优先参考与目标节点直接相连的邻居节点中的语义相似配置；
+- 首先在输入网络拓扑上下文中寻找同名顶层配置，或与目标配置语义相似的配置；
+- 优先参考目标节点、与目标节点直接相连的邻居节点以及其他相关节点中的类似配置结构；
+- 如果上下文中存在可靠的类似配置，优先遵循上下文中的 key、对象层级和数组层级；
+- 只有当上下文中找不到可靠的类似配置结构时，才使用提供的“目标配置常见 JSON 结构”作为兜底参考；
+- 常见结构中的占位值只表示 value 类型，不是最终答案，必须根据上下文预测真实 value；
+- 不要在上下文类似结构或兜底常见结构之外生成无关 key；
 - 不要输出解释、思考过程、额外文本；
 - 不要输出 <think>、</think> 或任何思维链内容；
 - 最终回答只输出目标配置的 JSON 对象本身，不要输出 Markdown 代码块，不要输出其他内容。
@@ -69,6 +99,14 @@ USER_PROMPT_TEMPLATE = """你是一个网络配置补全助手，给定一个网
 ```text
 {question_value}
 ```
+【目标配置顶层 Key】:
+```text
+{target_top_level_keys}
+```
+【目标配置常见 JSON 结构】:
+```json
+{structure_hints}
+```
 """
 
 
@@ -103,11 +141,45 @@ def load_qa(path: Path) -> Tuple[Optional[Dict[str, Any]], str]:
     return data, ""
 
 
+def output_top_level_keys(output_value: Any) -> Tuple[str, ...]:
+    """只读取监督答案的顶层 Key，不把答案内部结构或 value 放入 Prompt。"""
+
+    if not isinstance(output_value, dict):
+        return ()
+    return tuple(str(key) for key in output_value)
+
+
+def structure_hints_for_keys(top_level_keys: Tuple[str, ...]) -> str:
+    """把当前目标 Key 已配置的常见结构格式化为 Prompt 文本。"""
+
+    hints = [
+        structure
+        for key in top_level_keys
+        if key in TOP_LEVEL_KEY_STRUCTURE_HINTS
+        for structure in (
+            TOP_LEVEL_KEY_STRUCTURE_HINTS[key]
+            if isinstance(TOP_LEVEL_KEY_STRUCTURE_HINTS[key], list)
+            else [TOP_LEVEL_KEY_STRUCTURE_HINTS[key]]
+        )
+    ]
+    if not hints:
+        return "null"
+    return json.dumps(hints[0] if len(hints) == 1 else hints, indent=2, ensure_ascii=False)
+
+
 def build_user_prompt(sample: Dict[str, Any]) -> Tuple[str, Any]:
     question_value = sample["prompt"]
     input_value = json.dumps(sample["input"], indent=2, ensure_ascii=False)
+    top_level_keys = output_top_level_keys(sample["output"])
+    target_top_level_keys = ", ".join(top_level_keys) if top_level_keys else "未知"
+    structure_hints = structure_hints_for_keys(top_level_keys)
     # 模板中包含 JSON 示例的大括号，不能用 str.format。
-    prompt = USER_PROMPT_TEMPLATE.replace("{input_value}", input_value).replace("{question_value}", question_value)
+    prompt = (
+        USER_PROMPT_TEMPLATE.replace("{input_value}", input_value)
+        .replace("{question_value}", question_value)
+        .replace("{target_top_level_keys}", target_top_level_keys)
+        .replace("{structure_hints}", structure_hints)
+    )
     return prompt, sample["output"]
 
 
