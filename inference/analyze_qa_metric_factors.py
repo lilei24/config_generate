@@ -257,10 +257,10 @@ def visible_top_key_count(node: Any) -> int:
 
 
 def target_hop_neighbor_counts(input_value: Any, target_node_id: str) -> Dict[int, int]:
-    """统计目标节点最短路径距离恰好为 1、2、3 的节点数量。
+    """统计目标节点最短路径距离不超过 1、2、3 的累计节点数量。
 
     links 按无向边处理；重复边只计一次，自环和已经不在 input.nodes 中的端点
-    不计入图。每个节点只属于其最短路径距离对应的一个 hop。
+    不计入图。目标节点自身不计入邻居数量。
     """
 
     if not isinstance(input_value, dict) or not target_node_id:
@@ -311,7 +311,7 @@ def target_hop_neighbor_counts(input_value: Any, target_node_id: str) -> Dict[in
             frontier.append(neighbor_id)
 
     return {
-        hop: sum(1 for distance in distances.values() if distance == hop)
+        hop: sum(1 for distance in distances.values() if 0 < distance <= hop)
         for hop in (1, 2, 3)
     }
 
@@ -845,9 +845,10 @@ def run(args: argparse.Namespace) -> None:
             ),
             "neighbor_count_definition": (
                 "For node_config_qa only, locate the target node by metadata.target.node_id. "
-                "Treat input.links as undirected edges and count nodes whose shortest-path distance from the target "
-                "is exactly 1, 2, or 3. Duplicate links, self-loops, and endpoints absent from input.nodes do not "
-                "increase the counts."
+                "Treat input.links as undirected edges. The 1-hop count includes nodes with shortest-path distance "
+                "<= 1, the 2-hop count includes distance <= 2, and the 3-hop count includes distance <= 3. "
+                "The target node itself is excluded. Duplicate links, self-loops, and endpoints absent from "
+                "input.nodes do not increase the counts."
             ),
             "total_files": len(rows),
             "evaluated_files": sum(1 for row in rows if row["status"] == "ok"),
