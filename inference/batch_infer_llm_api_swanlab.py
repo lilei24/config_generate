@@ -150,7 +150,7 @@ def run(args: argparse.Namespace) -> None:
 
         if error:
             error_count += 1
-            result = {"model-ouput": "", "answer": "", "error": error}
+            result = {"user-prompt": "", "model-output": "", "answer": "", "error": error}
             append_jsonl(failure_log, {"file": str(path), "task": task_dir, "error": error})
             sample_rows.append(
                 sample_table_row(index, path.name, prompt_value, input_value, "", answer_value, False, error, metrics)
@@ -171,7 +171,8 @@ def run(args: argparse.Namespace) -> None:
                 )
                 parsed_output, parse_error = parse_model_output(raw_output)
                 result = {
-                    "model-ouput": parsed_output,
+                    "user-prompt": prompt,
+                    "model-output": parsed_output,
                     "answer": answer_value,
                 }
                 if parse_error:
@@ -201,7 +202,8 @@ def run(args: argparse.Namespace) -> None:
                 error = str(exc)
                 error_count += 1
                 result = {
-                    "model-ouput": "",
+                    "user-prompt": prompt,
+                    "model-output": "",
                     "answer": answer_value,
                     "error": error,
                 }

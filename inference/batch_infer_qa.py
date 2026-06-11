@@ -279,7 +279,7 @@ def run(args: argparse.Namespace) -> None:
         data, error = load_qa(path)
         answer_value: Any = ""
         if error:
-            result = {"model-ouput": "", "answer": "", "error": error}
+            result = {"user-prompt": "", "model-output": "", "answer": "", "error": error}
             append_jsonl(failure_log, {"file": str(path), "task": task_dir, "error": error})
         else:
             prompt, answer_value = build_user_prompt(data)
@@ -293,7 +293,8 @@ def run(args: argparse.Namespace) -> None:
                 )
                 parsed_output, parse_error = parse_model_output(model_output)
                 result = {
-                    "model-ouput": parsed_output,
+                    "user-prompt": prompt,
+                    "model-output": parsed_output,
                     "answer": answer_value,
                 }
                 if parse_error:
@@ -302,7 +303,8 @@ def run(args: argparse.Namespace) -> None:
             except Exception as exc:  # noqa: BLE001
                 error = str(exc)
                 result = {
-                    "model-ouput": "",
+                    "user-prompt": prompt,
+                    "model-output": "",
                     "answer": answer_value,
                     "error": error,
                 }
