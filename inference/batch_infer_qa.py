@@ -149,8 +149,8 @@ def output_top_level_keys(output_value: Any) -> Tuple[str, ...]:
     return tuple(str(key) for key in output_value)
 
 
-def structure_hints_for_keys(top_level_keys: Tuple[str, ...]) -> str:
-    """把当前目标 Key 已配置的常见结构格式化为 Prompt 文本。"""
+def structure_hints_value_for_keys(top_level_keys: Tuple[str, ...]) -> Any:
+    """返回当前目标 Key 对应的结构化常见配置；未配置时返回 None。"""
 
     hints = [
         structure
@@ -163,8 +163,24 @@ def structure_hints_for_keys(top_level_keys: Tuple[str, ...]) -> str:
         )
     ]
     if not hints:
-        return "null"
-    return json.dumps(hints[0] if len(hints) == 1 else hints, indent=2, ensure_ascii=False)
+        return None
+    return hints[0] if len(hints) == 1 else hints
+
+
+def structure_hints_for_keys(top_level_keys: Tuple[str, ...]) -> str:
+    """把结构化常见配置格式化为插入 Prompt 的 JSON 文本。"""
+
+    return json.dumps(
+        structure_hints_value_for_keys(top_level_keys),
+        indent=2,
+        ensure_ascii=False,
+    )
+
+
+def structure_hints_for_sample(sample: Dict[str, Any]) -> Any:
+    """提取当前样本实际使用的结构提示，供结果 JSON 直接保存。"""
+
+    return structure_hints_value_for_keys(output_top_level_keys(sample.get("output")))
 
 
 def build_user_prompt(sample: Dict[str, Any]) -> Tuple[str, Any]:
@@ -279,10 +295,11 @@ def run(args: argparse.Namespace) -> None:
         data, error = load_qa(path)
         answer_value: Any = ""
         if error:
-            result = {"user-prompt": "", "model-output": "", "answer": "", "error": error}
+            result = {"structure-hints": None, "model-output": "", "answer": "", "error": error}
             append_jsonl(failure_log, {"file": str(path), "task": task_dir, "error": error})
         else:
             prompt, answer_value = build_user_prompt(data)
+            structure_hints = structure_hints_for_sample(data)
             try:
                 model_output = chat_completion(
                     client=client,
@@ -293,7 +310,7 @@ def run(args: argparse.Namespace) -> None:
                 )
                 parsed_output, parse_error = parse_model_output(model_output)
                 result = {
-                    "user-prompt": prompt,
+                    "structure-hints": structure_hints,
                     "model-output": parsed_output,
                     "answer": answer_value,
                 }
@@ -303,7 +320,7 @@ def run(args: argparse.Namespace) -> None:
             except Exception as exc:  # noqa: BLE001
                 error = str(exc)
                 result = {
-                    "user-prompt": prompt,
+                    "structure-hints": structure_hints,
                     "model-output": "",
                     "answer": answer_value,
                     "error": error,

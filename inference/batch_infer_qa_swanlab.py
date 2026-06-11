@@ -27,6 +27,7 @@ from batch_infer_qa import (
     parse_model_output,
     print_progress,
     result_path,
+    structure_hints_for_sample,
     write_json,
 )
 from metric import evaluate_json
@@ -125,7 +126,7 @@ def run(args: argparse.Namespace) -> None:
 
         if error:
             error_count += 1
-            result = {"user-prompt": "", "model-output": "", "answer": "", "error": error}
+            result = {"structure-hints": None, "model-output": "", "answer": "", "error": error}
             append_jsonl(failure_log, {"file": str(path), "task": task_dir, "error": error})
             sample_rows.append(
                 sample_table_row(index, path.name, prompt_value, input_value, "", answer_value, False, error, metrics)
@@ -140,6 +141,7 @@ def run(args: argparse.Namespace) -> None:
             prompt_value = data["prompt"]
             input_value = data["input"]
             prompt, answer_value = build_user_prompt(data)
+            structure_hints = structure_hints_for_sample(data)
             try:
                 raw_model_output = chat_completion(
                     client=client,
@@ -150,7 +152,7 @@ def run(args: argparse.Namespace) -> None:
                 )
                 parsed_output, parse_error = parse_model_output(raw_model_output)
                 result = {
-                    "user-prompt": prompt,
+                    "structure-hints": structure_hints,
                     "model-output": parsed_output,
                     "answer": answer_value,
                 }
@@ -186,7 +188,7 @@ def run(args: argparse.Namespace) -> None:
                 error = str(exc)
                 error_count += 1
                 result = {
-                    "user-prompt": prompt,
+                    "structure-hints": structure_hints,
                     "model-output": "",
                     "answer": answer_value,
                     "error": error,
