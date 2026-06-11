@@ -8,7 +8,7 @@ import csv
 import json
 import math
 import time
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, deque
 from pathlib import Path
 from typing import Any, DefaultDict, Dict, Iterable, List, Optional, Sequence, Tuple
 from xml.sax.saxutils import escape
@@ -33,6 +33,7 @@ DEFAULT_GOLD_KEY = "answer"
 DEFAULT_PROGRESS_INTERVAL = 500
 DEFAULT_PATH_OCCURRENCE_BINS = "0,1,2,5,10,20,50,100,200,500,1000"
 DEFAULT_NODE_COUNT_BINS = "0,1,2,5,10,20,50,100,200,500,1000"
+DEFAULT_NEIGHBOR_COUNT_BINS = "0,1,2,3,5,10,20,50,100,200"
 DEFAULT_TOP_KEY_COUNT_BINS = "0,1,2,5,10,20,50,100,200,500,1000,2000"
 
 
@@ -65,6 +66,9 @@ SAMPLE_FIELDS = [
     "input_node_count",
     "target_node_id",
     "target_node_found",
+    "target_1hop_neighbor_count",
+    "target_2hop_neighbor_count",
+    "target_3hop_neighbor_count",
     "target_node_visible_top_key_count",
     "all_nodes_visible_top_key_count",
 ] + METRIC_FIELDS
@@ -252,6 +256,66 @@ def visible_top_key_count(node: Any) -> int:
     return sum(len(item) for item in items if isinstance(item, dict))
 
 
+def target_hop_neighbor_counts(input_value: Any, target_node_id: str) -> Dict[int, int]:
+    """统计目标节点最短路径距离恰好为 1、2、3 的节点数量。
+
+    links 按无向边处理；重复边只计一次，自环和已经不在 input.nodes 中的端点
+    不计入图。每个节点只属于其最短路径距离对应的一个 hop。
+    """
+
+    if not isinstance(input_value, dict) or not target_node_id:
+        return {1: 0, 2: 0, 3: 0}
+    nodes = input_value.get("nodes")
+    links = input_value.get("links")
+    if not isinstance(nodes, list) or not isinstance(links, list):
+        return {1: 0, 2: 0, 3: 0}
+
+    valid_node_ids = {
+        str(node["id"])
+        for node in nodes
+        if isinstance(node, dict) and node.get("id") is not None
+    }
+    if target_node_id not in valid_node_ids:
+        return {1: 0, 2: 0, 3: 0}
+
+    adjacency: Dict[str, Set[str]] = {node_id: set() for node_id in valid_node_ids}
+    for link in links:
+        if not isinstance(link, dict):
+            continue
+        source = link.get("source")
+        target = link.get("target")
+        if source is None or target is None:
+            continue
+        source_id = str(source)
+        target_id = str(target)
+        if (
+            source_id == target_id
+            or source_id not in valid_node_ids
+            or target_id not in valid_node_ids
+        ):
+            continue
+        adjacency[source_id].add(target_id)
+        adjacency[target_id].add(source_id)
+
+    distances = {target_node_id: 0}
+    frontier = deque([target_node_id])
+    while frontier:
+        current = frontier.popleft()
+        current_distance = distances[current]
+        if current_distance >= 3:
+            continue
+        for neighbor_id in adjacency[current]:
+            if neighbor_id in distances:
+                continue
+            distances[neighbor_id] = current_distance + 1
+            frontier.append(neighbor_id)
+
+    return {
+        hop: sum(1 for distance in distances.values() if distance == hop)
+        for hop in (1, 2, 3)
+    }
+
+
 def node_factor_values(qa_sample: Dict[str, Any]) -> Dict[str, Any]:
     input_value = qa_sample.get("input")
     nodes = input_value.get("nodes") if isinstance(input_value, dict) else None
@@ -269,10 +333,14 @@ def node_factor_values(qa_sample: Dict[str, Any]) -> Dict[str, Any]:
             target_node = node
             break
 
+    hop_counts = target_hop_neighbor_counts(input_value, target_node_id_text)
     return {
         "input_node_count": len(node_list),
         "target_node_id": target_node_id_text,
         "target_node_found": bool(target_node is not None),
+        "target_1hop_neighbor_count": hop_counts[1],
+        "target_2hop_neighbor_count": hop_counts[2],
+        "target_3hop_neighbor_count": hop_counts[3],
         "target_node_visible_top_key_count": visible_top_key_count(target_node),
         "all_nodes_visible_top_key_count": sum(visible_top_key_count(node) for node in node_list),
     }
@@ -326,6 +394,9 @@ def collect_rows(args: argparse.Namespace) -> Tuple[List[Dict[str, Any]], List[D
             "input_node_count": 0,
             "target_node_id": "",
             "target_node_found": False,
+            "target_1hop_neighbor_count": 0,
+            "target_2hop_neighbor_count": 0,
+            "target_3hop_neighbor_count": 0,
             "target_node_visible_top_key_count": 0,
             "all_nodes_visible_top_key_count": 0,
             **empty_metric_values(),
@@ -629,6 +700,8 @@ def remove_deprecated_outputs(output_root: Path) -> None:
         "target_node_visible_top_key_count_metrics.svg",
         "all_nodes_visible_top_key_count_metrics.csv",
         "all_nodes_visible_top_key_count_metrics.svg",
+        "target_neighbor_count_metrics.csv",
+        "target_neighbor_count_metrics.svg",
     ]
     for name in deprecated_names:
         path = output_root / name
@@ -640,6 +713,7 @@ def run(args: argparse.Namespace) -> None:
     rows, path_detail_rows = collect_rows(args)
     path_bins = parse_int_csv(args.path_occurrence_bins)
     node_bins = parse_int_csv(args.node_count_bins)
+    neighbor_bins = parse_int_csv(args.neighbor_count_bins)
     key_bins = parse_int_csv(args.top_key_count_bins)
 
     top_key_rows = group_rows(rows, "target_top_level_key", exact_grouper("target_top_level_key"))
@@ -655,6 +729,14 @@ def run(args: argparse.Namespace) -> None:
     )
     node_count_rows = group_rows(rows, "input_node_count", numeric_bin_grouper("input_node_count", node_bins))
     node_task_rows = [row for row in rows if row["task"] == "node_config_qa"]
+    hop_neighbor_rows = {
+        hop: group_rows(
+            node_task_rows,
+            "target_%shop_neighbor_count" % hop,
+            numeric_bin_grouper("target_%shop_neighbor_count" % hop, neighbor_bins),
+        )
+        for hop in (1, 2, 3)
+    }
     target_key_count_rows = group_rows_by_top_level_key(
         node_task_rows,
         "target_node_visible_top_key_count",
@@ -695,6 +777,12 @@ def run(args: argparse.Namespace) -> None:
         TOP_KEY_GROUP_FIELDS,
     )
     write_csv(output_root / "node_count_metrics.csv", node_count_rows, GROUP_FIELDS)
+    for hop, hop_rows in hop_neighbor_rows.items():
+        write_csv(
+            output_root / ("target_%shop_neighbor_count_metrics.csv" % hop),
+            hop_rows,
+            GROUP_FIELDS,
+        )
     write_csv(
         output_root / "top_level_key_target_node_visible_top_key_count_metrics.csv",
         target_key_count_rows,
@@ -718,6 +806,12 @@ def run(args: argparse.Namespace) -> None:
         top_key_path_occurrence_rows,
     )
     write_metric_svg(output_root / "node_count_metrics.svg", "Input node count vs metrics", node_count_rows)
+    for hop, hop_rows in hop_neighbor_rows.items():
+        write_metric_svg(
+            output_root / ("target_%shop_neighbor_count_metrics.svg" % hop),
+            "Target node %s-hop neighbor count vs metrics" % hop,
+            hop_rows,
+        )
     write_metric_svg(
         output_root / "top_level_key_target_node_visible_top_key_count_metrics.svg",
         "Top-level key: target node visible top-level key count vs metrics",
@@ -749,6 +843,12 @@ def run(args: argparse.Namespace) -> None:
                 "input.nodes. Count visible top-level config keys in that target node and in all input nodes. "
                 "Grouping is then performed within each target_top_level_key."
             ),
+            "neighbor_count_definition": (
+                "For node_config_qa only, locate the target node by metadata.target.node_id. "
+                "Treat input.links as undirected edges and count nodes whose shortest-path distance from the target "
+                "is exactly 1, 2, or 3. Duplicate links, self-loops, and endpoints absent from input.nodes do not "
+                "increase the counts."
+            ),
             "total_files": len(rows),
             "evaluated_files": sum(1 for row in rows if row["status"] == "ok"),
             "model_error_files": sum(1 for row in rows if row["status"] == "model_error"),
@@ -762,6 +862,9 @@ def run(args: argparse.Namespace) -> None:
                 "answer_path_occurrence_groups": len(path_occurrence_rows),
                 "top_level_key_answer_path_occurrence_groups": len(top_key_path_occurrence_rows),
                 "node_count_groups": len(node_count_rows),
+                "target_1hop_neighbor_count_groups": len(hop_neighbor_rows[1]),
+                "target_2hop_neighbor_count_groups": len(hop_neighbor_rows[2]),
+                "target_3hop_neighbor_count_groups": len(hop_neighbor_rows[3]),
                 "top_level_key_target_node_visible_top_key_count_groups": len(target_key_count_rows),
                 "top_level_key_all_nodes_visible_top_key_count_groups": len(all_key_count_rows),
             },
@@ -786,6 +889,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--array-mode", choices=["wildcard", "index"], default="wildcard")
     parser.add_argument("--path-occurrence-bins", default=DEFAULT_PATH_OCCURRENCE_BINS)
     parser.add_argument("--node-count-bins", default=DEFAULT_NODE_COUNT_BINS)
+    parser.add_argument("--neighbor-count-bins", default=DEFAULT_NEIGHBOR_COUNT_BINS)
     parser.add_argument("--top-key-count-bins", default=DEFAULT_TOP_KEY_COUNT_BINS)
     parser.add_argument("--progress-interval", type=int, default=DEFAULT_PROGRESS_INTERVAL)
     parser.add_argument("--limit", type=int, default=0)
