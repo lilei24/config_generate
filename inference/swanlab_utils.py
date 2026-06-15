@@ -5,7 +5,8 @@ from __future__ import annotations
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, Optional
+from statistics import mean
+from typing import Any, Dict, List, Optional
 
 
 def import_swanlab() -> Any:
@@ -61,6 +62,33 @@ def metric_log_values(metrics: Dict[str, Any], prefix: str = "") -> Dict[str, An
         base + "hallucination_missing/hallucinated_rate": hm.get("hallucinated_rate", 0.0),
         base + "hallucination_missing/missing_rate": hm.get("missing_rate", 0.0),
     }
+
+
+def macro_metric_log_values(metrics_list: List[Dict[str, Any]], prefix: str = "") -> Dict[str, Any]:
+    if not metrics_list:
+        return {}
+    rows = [metric_log_values(metrics, prefix=prefix) for metrics in metrics_list]
+    keys = sorted({key for row in rows for key in row})
+    return {
+        key: mean(float(row.get(key, 0.0)) for row in rows)
+        for key in keys
+    }
+
+
+def running_eval_log_values(
+    accumulator: Dict[str, Any],
+    metrics_list: List[Dict[str, Any]],
+    mode: str,
+    prefix: str = "eval",
+) -> Dict[str, Any]:
+    if mode == "macro":
+        return macro_metric_log_values(metrics_list, prefix=prefix)
+    if mode != "micro":
+        raise ValueError("Unsupported eval metric mode: %s" % mode)
+
+    from batch_evaluate_qa import finalize_accumulator
+
+    return metric_log_values(finalize_accumulator(accumulator), prefix=prefix)
 
 
 def sample_table_headers() -> list[str]:

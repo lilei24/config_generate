@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List
 
-from batch_evaluate_qa import add_metric, empty_metric_accumulator, finalize_accumulator
+from batch_evaluate_qa import add_metric, empty_metric_accumulator
 from batch_infer_qa import (
     DEFAULT_PROGRESS_INTERVAL,
     DEFAULT_QA_ROOT,
@@ -32,6 +32,7 @@ from swanlab_utils import (
     import_swanlab,
     make_table,
     metric_log_values,
+    running_eval_log_values,
     sample_table_headers,
     sample_table_row,
 )
@@ -48,6 +49,7 @@ DEFAULT_SWANLAB_MODE = "cloud"
 DEFAULT_SYSTEM_PROMPT = "你是个智能助手"
 DEFAULT_SAMPLE_TABLE_LOG_INTERVAL = 50
 DEFAULT_POST_RESPONSE_WAIT_SECONDS = 5.0
+DEFAULT_EVAL_METRIC_MODE = "micro"
 
 
 def json_text(value: Any) -> str:
@@ -102,11 +104,16 @@ def log_sample(
     swanlab.log(payload, step=index)
 
 
-def log_running_eval(swanlab: Any, index: int, accumulator: Dict[str, Any]) -> None:
+def log_running_eval(
+    swanlab: Any,
+    index: int,
+    accumulator: Dict[str, Any],
+    eval_metrics: List[Dict[str, Any]],
+    mode: str,
+) -> None:
     if accumulator["sample_count"] <= 0:
         return
-    metrics = finalize_accumulator(accumulator)
-    swanlab.log(metric_log_values(metrics, prefix="eval"), step=index)
+    swanlab.log(running_eval_log_values(accumulator, eval_metrics, mode, prefix="eval"), step=index)
 
 
 def log_sample_table(swanlab: Any, rows: List[List[Any]], step: int) -> None:
@@ -140,6 +147,7 @@ def run(args: argparse.Namespace) -> None:
     success_count = 0
     error_count = 0
     eval_accumulator = empty_metric_accumulator()
+    eval_metrics: List[Dict[str, Any]] = []
     sample_rows: List[List[Any]] = []
     for index, (task_dir, path) in enumerate(qa_files, start=1):
         out_path = result_path(args.output_root, args.split, task_dir, args.qa_root, path)
@@ -200,6 +208,7 @@ def run(args: argparse.Namespace) -> None:
                 log_sample(swanlab=swanlab, index=index, metrics=metrics, error=parse_error)
                 if "error" not in metrics:
                     add_metric(eval_accumulator, metrics)
+                    eval_metrics.append(metrics)
             except Exception as exc:  # noqa: BLE001
                 error = str(exc)
                 error_count += 1
@@ -235,7 +244,7 @@ def run(args: argparse.Namespace) -> None:
             },
             step=index,
         )
-        log_running_eval(swanlab, index, eval_accumulator)
+        log_running_eval(swanlab, index, eval_accumulator, eval_metrics, args.eval_metric_mode)
         if args.sample_table_log_interval > 0 and (
             index % args.sample_table_log_interval == 0 or index == len(qa_files)
         ):
@@ -280,6 +289,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--swanlab-project", default=DEFAULT_SWANLAB_PROJECT)
     parser.add_argument("--swanlab-experiment", default=DEFAULT_SWANLAB_EXPERIMENT)
     parser.add_argument("--swanlab-mode", default=DEFAULT_SWANLAB_MODE)
+    parser.add_argument(
+        "--eval-metric-mode",
+        choices=["micro", "macro"],
+        default=DEFAULT_EVAL_METRIC_MODE,
+        help=(
+            "SwanLab eval curve aggregation. micro accumulates metric counts before computing PR/F1; "
+            "macro averages per-sample metric values. Default: micro."
+        ),
+    )
     parser.add_argument(
         "--sample-table-log-interval",
         type=int,
