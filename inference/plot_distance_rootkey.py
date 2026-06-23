@@ -123,6 +123,9 @@ def load_data(csv_path: Path, metric: str, split: Optional[str], task: Optional[
               min_files: int, root_keys: Optional[List[str]]) -> pd.DataFrame:
     df = pd.read_csv(csv_path)
 
+    n_raw = len(df)
+    print("  raw rows: %d" % n_raw, flush=True)
+
     for col in NUMERIC_COLS:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
@@ -138,15 +141,21 @@ def load_data(csv_path: Path, metric: str, split: Optional[str], task: Optional[
     if metric not in df.columns:
         raise ValueError("Metric '%s' not found. Available: %s" % (metric, METRIC_COLUMNS))
 
-    # Drop rows where metric is missing
+    # Drop rows where metric is missing (empty string → NaN after coercion)
+    before = len(df)
     df = df.dropna(subset=[metric])
+    print("  after dropna(%s): %d (dropped %d)" % (metric, len(df), before - len(df)), flush=True)
 
     # Filter out groups with too few evaluated samples
+    before = len(df)
     df = df[df["evaluated_files"] >= min_files]
+    print("  after min-files>=%d: %d (dropped %d)" % (min_files, len(df), before - len(df)), flush=True)
 
     # Drop rows without distance group (multi-key answers, non-object answers)
+    before = len(df)
     df = df[df["nearest_same_top_key_group"].notna()]
     df = df[df["nearest_same_top_key_group"].astype(str).str.strip() != ""]
+    print("  after non-empty distance group: %d (dropped %d)" % (len(df), before - len(df)), flush=True)
 
     if split:
         df = df[df["split"] == split]
@@ -157,6 +166,10 @@ def load_data(csv_path: Path, metric: str, split: Optional[str], task: Optional[
 
     if df.empty:
         raise ValueError("No rows after filtering. Try lowering --min-files.")
+    print("  unique root_keys: %d, unique distance_groups: %s" % (
+        df["target_top_level_key"].nunique(),
+        sorted(df["nearest_same_top_key_group"].dropna().unique()),
+    ), flush=True)
 
     # Sort order
     dist_order = _sorted_distances(df["nearest_same_top_key_group"].unique())
@@ -183,10 +196,12 @@ def plot_heatmap(df: pd.DataFrame, metric: str, output_dir: Path) -> None:
         values=metric,
         aggfunc="mean",
     )
+    print("  pivot shape: %s" % (pivot.shape,), flush=True)
     pivot = pivot.dropna(how="all").dropna(axis=1, how="all")
+    print("  after dropna: %s" % (pivot.shape,), flush=True)
     n_rows, n_cols = pivot.shape
     if n_rows < 1 or n_cols < 1:
-        print("  skip: no data", flush=True)
+        print("  skip: no data after pivot+dropna", flush=True)
         return
 
     cell_h, cell_w = 0.5, 0.7
@@ -214,6 +229,10 @@ def plot_heatmap(df: pd.DataFrame, metric: str, output_dir: Path) -> None:
 
 def plot_bar_grid(df: pd.DataFrame, metric: str, output_dir: Path) -> None:
     print("[bar-grid] generating …", flush=True)
+    print("  input rows: %d, root_keys: %d, dist_groups: %d" % (
+        len(df), df["target_top_level_key"].nunique(),
+        df["nearest_same_top_key_group"].nunique(),
+    ), flush=True)
     root_key_list = sorted(df["target_top_level_key"].unique())
     n = len(root_key_list)
     ncols = min(3, n)
