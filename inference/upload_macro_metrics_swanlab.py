@@ -9,10 +9,6 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
 
 from batch_evaluate_qa import (
-    DEFAULT_GOLD_KEY,
-    DEFAULT_PRED_KEYS,
-    DEFAULT_PROGRESS_INTERVAL,
-    DEFAULT_RESULT_ROOT,
     evaluate_one_record,
     iter_result_files,
     read_json,
@@ -26,8 +22,12 @@ from swanlab_utils import (
 )
 
 
+DEFAULT_RESULT_ROOT = Path("inference-results")
 DEFAULT_SPLITS = "val"
 DEFAULT_TASKS = "node_config_qa"
+DEFAULT_PRED_KEYS = "model-output,model_output,model-ouput"
+DEFAULT_GOLD_KEY = "answer"
+DEFAULT_PROGRESS_INTERVAL = 500
 DEFAULT_SWANLAB_PROJECT = "config-generation"
 DEFAULT_SWANLAB_EXPERIMENT = "offline-macro-metrics"
 DEFAULT_SWANLAB_MODE = "cloud"
@@ -160,7 +160,7 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_TASKS,
         help="Comma-separated task dirs, e.g. node_config_qa,device_config_qa.",
     )
-    parser.add_argument("--pred-keys", default=",".join(DEFAULT_PRED_KEYS))
+    parser.add_argument("--pred-keys", default=DEFAULT_PRED_KEYS)
     parser.add_argument("--gold-key", default=DEFAULT_GOLD_KEY)
     parser.add_argument("--array-mode", choices=["wildcard", "index"], default="wildcard")
     parser.add_argument("--limit", type=int, default=0, help="Only process first N files. 0 means all.")
