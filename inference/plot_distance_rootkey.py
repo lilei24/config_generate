@@ -190,9 +190,18 @@ def load_data(csv_path: Path, metric: str, split: Optional[str], task: Optional[
 
 def plot_heatmap(df: pd.DataFrame, metric: str, output_dir: Path) -> None:
     print("[heatmap] generating …", flush=True)
-    pivot = df.pivot_table(
-        index="target_top_level_key",
-        columns="nearest_same_top_key_group",
+    # Rows = distance group (sorted 1..inf bottom→top), cols = root_key
+    dist_order = _sorted_distances(df["nearest_same_top_key_group"].unique())
+    # Reverse so seaborn renders top row = inf, bottom row = 1
+    dist_order_rev = list(reversed(dist_order))
+    df_copy = df.copy()
+    df_copy["nearest_same_top_key_group"] = pd.Categorical(
+        df_copy["nearest_same_top_key_group"], categories=dist_order_rev, ordered=True
+    )
+
+    pivot = df_copy.pivot_table(
+        index="nearest_same_top_key_group",
+        columns="target_top_level_key",
         values=metric,
         aggfunc="mean",
     )
@@ -204,23 +213,23 @@ def plot_heatmap(df: pd.DataFrame, metric: str, output_dir: Path) -> None:
         print("  skip: no data after pivot+dropna", flush=True)
         return
 
-    cell_h, cell_w = 0.5, 0.7
+    cell_h, cell_w = 0.55, 0.8
     fig, ax = plt.subplots(figsize=(max(5, n_cols * cell_w + 2),
                                     max(4, n_rows * cell_h + 1.5)))
-    annot = n_rows * n_cols <= 60
     vmin = pivot.min().min() if not pivot.isna().all().all() else 0.0
     vmax = pivot.max().max() if not pivot.isna().all().all() else 1.0
+    # Always annotate with numbers
     sns.heatmap(
-        pivot, annot=annot, fmt=".2f", cmap="YlOrRd",
+        pivot, annot=True, fmt=".2f", cmap="YlOrRd",
         vmin=vmin, vmax=vmax, linewidths=0.5, linecolor="white",
         cbar_kws={"shrink": 0.8}, ax=ax,
     )
-    ax.set_title("%s\nRoot Key × Distance Group  |  Heatmap" % _metric_label(metric), fontsize=13)
-    ax.set_xlabel("Nearest Same-Top-Key Distance Group")
-    ax.set_ylabel("Root Key")
-    ax.tick_params(axis="y", labelsize=9)
-    ax.tick_params(axis="x", labelsize=10)
-    _close_fig(fig, output_dir / "heatmap" / ("rootkey_distance_%s.png" % metric))
+    ax.set_title("%s\nDistance Group × Root Key  |  Heatmap" % _metric_label(metric), fontsize=13)
+    ax.set_xlabel("Root Key")
+    ax.set_ylabel("Nearest Same-Top-Key Distance Group  (bottom → top)")
+    ax.tick_params(axis="y", labelsize=10)
+    ax.tick_params(axis="x", labelsize=9, rotation=30)
+    _close_fig(fig, output_dir / "heatmap" / ("distance_rootkey_%s.png" % metric))
 
 
 # ---------------------------------------------------------------------------
@@ -260,7 +269,13 @@ def plot_bar_grid(df: pd.DataFrame, metric: str, output_dir: Path) -> None:
             labels.append(dist)
 
         x_pos = range(len(labels))
-        ax.bar(x_pos, values, color=cmap(ri % 8), width=0.7)
+        bar_containers = ax.bar(x_pos, values, color=cmap(ri % 8), width=0.7)
+        # Annotate bar values on top
+        for bar_obj, v in zip(bar_containers, values):
+            if not np.isnan(v) and v > 0:
+                ax.text(bar_obj.get_x() + bar_obj.get_width() / 2, v + 0.01,
+                        "%.2f" % v, ha="center", va="bottom", fontsize=7)
+        # Annotate sample count at bottom
         for xi, (dist, cnt) in enumerate(zip(labels, counts)):
             if cnt:
                 ax.text(xi, 0.02, "n=%d" % cnt, ha="center", va="bottom",
@@ -310,8 +325,13 @@ def plot_bar_all(df: pd.DataFrame, metric: str, output_dir: Path) -> None:
             match = sub[sub["nearest_same_top_key_group"] == dist]
             values.append(match[metric].iloc[0] if not match.empty else np.nan)
         offset = (ri - (n_rk - 1) / 2) * bar_width
-        ax.bar(x_pos + offset, values, bar_width * 0.9,
-               color=cmap(ri % 10), label=rk[:30])
+        bar_containers = ax.bar(x_pos + offset, values, bar_width * 0.9,
+                                color=cmap(ri % 10), label=rk[:30])
+        # Annotate nonzero values on top of bars
+        for bar_obj, v in zip(bar_containers, values):
+            if not np.isnan(v) and v > 0:
+                ax.text(bar_obj.get_x() + bar_obj.get_width() / 2, v + 0.005,
+                        "%.2f" % v, ha="center", va="bottom", fontsize=6, rotation=90)
 
     ax.set_xticks(x_pos)
     ax.set_xticklabels(dist_order, fontsize=10)
