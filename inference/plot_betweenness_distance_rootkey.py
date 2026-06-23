@@ -162,9 +162,31 @@ def _close_fig(fig: Any, path: Path) -> None:
 # Data loading + filtering
 # ---------------------------------------------------------------------------
 
+REQUIRED_COLUMNS = [
+    "split", "task",
+    "betweenness_centrality_group", "nearest_same_top_key_distance",
+    "target_top_level_key", "evaluated_files",
+]
+
+
 def load_data(csv_path: Path, metric: str, split: Optional[str], task: Optional[str],
               min_files: int, root_keys: Optional[List[str]]) -> pd.DataFrame:
     df = _read_grouped_csv(csv_path)
+
+    missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
+    if missing:
+        raise ValueError(
+            "CSV is missing required columns: %s\n"
+            "Available columns: %s\n"
+            "This plot script expects output from analyze_betweenness_distance_rootkey.py."
+            % (missing, list(df.columns))
+        )
+
+    if metric not in df.columns:
+        raise ValueError(
+            "Metric column '%s' not found in CSV. Available: %s"
+            % (metric, [c for c in df.columns if c not in ("split", "task")][:20])
+        )
 
     # Filter
     if split:
