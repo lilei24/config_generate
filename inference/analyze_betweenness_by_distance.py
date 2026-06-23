@@ -809,7 +809,7 @@ def group_rows_two_level(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         grouped[key].append(row)
 
     output: List[Dict[str, Any]] = []
-    for (split, task, bc_group, dist) in sorted(
+    for (split, task, bc_group, dist), items in sorted(
         grouped.items(),
         key=lambda item: (
             item[0][0],
@@ -818,7 +818,6 @@ def group_rows_two_level(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             _distance_sort_key(item[0][3]),
         ),
     ):
-        items = grouped[(split, task, bc_group, dist)]
         accumulator = empty_metric_accumulator()
         for item in items:
             if item["status"] == "ok":
