@@ -42,9 +42,37 @@ PER_NODE_FIELDS = [
     "betweenness_centrality",
 ]
 
+PER_OWNER_FIELDS = [
+    "split",
+    "task",
+    "owner_kind",
+    "owner_id",
+    "file",
+    "top_level_key",
+    "degree_centrality",
+    "betweenness_centrality",
+]
+
 SUMMARY_FIELDS = [
     "split",
     "task",
+    "top_level_key",
+    "node_occurrences",
+    "file_count",
+    "degree_mean",
+    "degree_median",
+    "degree_min",
+    "degree_max",
+    "betweenness_mean",
+    "betweenness_median",
+    "betweenness_min",
+    "betweenness_max",
+]
+
+OWNER_SUMMARY_FIELDS = [
+    "split",
+    "task",
+    "owner_kind",
     "top_level_key",
     "node_occurrences",
     "file_count",
@@ -65,6 +93,14 @@ class KeyCentralityStats:
     betweenness_values: list[float] = field(default_factory=list)
     files: set[str] = field(default_factory=set)
     node_occurrences: int = 0
+
+
+@dataclass
+class KeyOwnerStats:
+    files: set[str] = field(default_factory=set)
+    node_occurrences: int = 0
+    degree_values: list[float] = field(default_factory=list)
+    betweenness_values: list[float] = field(default_factory=list)
 
 
 def parse_csv_values(text: str) -> List[str]:
@@ -105,6 +141,21 @@ def node_config_items(node: Any) -> List[Any]:
 def node_top_level_keys(node: Any) -> List[str]:
     keys: set[str] = set()
     for item in node_config_items(node):
+        if isinstance(item, dict):
+            keys.update(str(key) for key in item.keys())
+    return sorted(keys)
+
+
+def device_group_config_items(device_group: Any) -> List[Any]:
+    if not isinstance(device_group, dict):
+        return []
+    items = device_group.get("configs", [])
+    return items if isinstance(items, list) else []
+
+
+def device_group_top_level_keys(device_group: Any) -> List[str]:
+    keys: set[str] = set()
+    for item in device_group_config_items(device_group):
         if isinstance(item, dict):
             keys.update(str(key) for key in item.keys())
     return sorted(keys)
@@ -208,11 +259,18 @@ def collect_rows(
     splits: List[str],
     tasks: List[str],
     progress_interval: int,
-) -> Tuple[List[Dict[str, Any]], Dict[Tuple[str, str, str], KeyCentralityStats], Dict[str, Any]]:
+) -> Tuple[
+    List[Dict[str, Any]],
+    List[Dict[str, Any]],
+    Dict[Tuple[str, str, str], KeyCentralityStats],
+    Dict[Tuple[str, str, str, str], KeyOwnerStats],
+    Dict[str, Any],
+]:
     files = list(iter_json_files(dataset_root, splits, tasks))
     total = len(files)
     started_at = time.time()
     rows: List[Dict[str, Any]] = []
+    owner_rows: List[Dict[str, Any]] = []
     summary: Dict[str, Any] = {
         "dataset_root": str(dataset_root),
         "splits": splits,
@@ -224,6 +282,7 @@ def collect_rows(
         "missing_split_dirs": [split for split in splits if not (dataset_root / split).exists()],
     }
     per_key_stats: Dict[Tuple[str, str, str], KeyCentralityStats] = defaultdict(KeyCentralityStats)
+    owner_stats: Dict[Tuple[str, str, str, str], KeyOwnerStats] = defaultdict(KeyOwnerStats)
 
     print("[key-centrality] start: %s files" % total, flush=True)
     for index, (split, task, path) in enumerate(files, start=1):
@@ -268,6 +327,51 @@ def collect_rows(
                 bucket.betweenness_values.append(betweenness_value)
                 bucket.files.add(file_name)
 
+                owner_bucket = owner_stats[(split, task, "node", key)]
+                owner_bucket.node_occurrences += 1
+                owner_bucket.degree_values.append(degree_value)
+                owner_bucket.betweenness_values.append(betweenness_value)
+                owner_bucket.files.add(file_name)
+                owner_rows.append(
+                    {
+                        "split": split,
+                        "task": task,
+                        "owner_kind": "node",
+                        "owner_id": node_id,
+                        "file": file_name,
+                        "top_level_key": key,
+                        "degree_centrality": degree_value,
+                        "betweenness_centrality": betweenness_value,
+                    }
+                )
+
+        device_groups = graph.get("deviceGroups")
+        if isinstance(device_groups, list):
+            for group_index, device_group in enumerate(device_groups):
+                if not isinstance(device_group, dict):
+                    continue
+                group_keys = device_group_top_level_keys(device_group)
+                if not group_keys:
+                    continue
+                group_name = device_group.get("deviceGroup", {}).get("NAME") if isinstance(device_group.get("deviceGroup"), dict) else ""
+                owner_id = str(group_name) if group_name not in (None, "") else str(group_index)
+                for key in group_keys:
+                    owner_bucket = owner_stats[(split, task, "device_group", key)]
+                    owner_bucket.node_occurrences += 1
+                    owner_bucket.files.add(file_name)
+                    owner_rows.append(
+                        {
+                            "split": split,
+                            "task": task,
+                            "owner_kind": "device_group",
+                            "owner_id": owner_id,
+                            "file": file_name,
+                            "top_level_key": key,
+                            "degree_centrality": "",
+                            "betweenness_centrality": "",
+                        }
+                    )
+
         if progress_interval > 0 and (index % progress_interval == 0 or index == total):
             elapsed = max(0.001, time.time() - started_at)
             speed = index / elapsed
@@ -279,7 +383,7 @@ def collect_rows(
                 flush=True,
             )
 
-    return rows, per_key_stats, summary
+    return rows, owner_rows, per_key_stats, owner_stats, summary
 
 
 def summarize(values: List[float]) -> Dict[str, Any]:
@@ -325,23 +429,56 @@ def summary_rows(per_key_stats: Dict[Tuple[str, str, str], KeyCentralityStats]) 
     return rows
 
 
+def owner_summary_rows(owner_stats: Dict[Tuple[str, str, str, str], KeyOwnerStats]) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    for (split, task, owner_kind, key), stats in sorted(owner_stats.items(), key=lambda item: (item[0][0], item[0][1], item[0][2], item[0][3])):
+        degree_summary = summarize(stats.degree_values)
+        betweenness_summary = summarize(stats.betweenness_values)
+        rows.append(
+            {
+                "split": split,
+                "task": task,
+                "owner_kind": owner_kind,
+                "top_level_key": key,
+                "node_occurrences": stats.node_occurrences,
+                "file_count": len(stats.files),
+                "degree_mean": degree_summary["mean"],
+                "degree_median": degree_summary["median"],
+                "degree_min": degree_summary["min"],
+                "degree_max": degree_summary["max"],
+                "betweenness_mean": betweenness_summary["mean"],
+                "betweenness_median": betweenness_summary["median"],
+                "betweenness_min": betweenness_summary["min"],
+                "betweenness_max": betweenness_summary["max"],
+            }
+        )
+    return rows
+
+
 def run(args: argparse.Namespace) -> None:
     splits = parse_csv_values(args.splits)
     tasks = parse_csv_values(args.tasks)
-    rows, per_key_stats, summary = collect_rows(args.dataset_root, splits, tasks, args.progress_interval)
+    rows, owner_rows, per_key_stats, owner_stats, summary = collect_rows(args.dataset_root, splits, tasks, args.progress_interval)
     output_dir = args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
 
     write_csv(output_dir / "per_node_top_level_key_centrality.csv", rows, PER_NODE_FIELDS)
+    write_csv(output_dir / "per_owner_top_level_key_centrality.csv", owner_rows, PER_OWNER_FIELDS)
     top_key_rows = summary_rows(per_key_stats)
     write_csv(output_dir / "top_level_key_centrality_summary.csv", top_key_rows, SUMMARY_FIELDS)
+    write_csv(output_dir / "top_level_key_owner_summary.csv", owner_summary_rows(owner_stats), OWNER_SUMMARY_FIELDS)
 
     summary.update(
         {
             "per_node_rows": len(rows),
+            "per_owner_rows": len(owner_rows),
             "unique_keys": len({key for _, _, key in per_key_stats}),
             "top_keys_by_split": {
                 split: len([key for current_split, _, key in per_key_stats if current_split == split])
+                for split in splits
+            },
+            "owner_keys_by_split": {
+                split: len([key for current_split, _, _, key in owner_stats if current_split == split])
                 for split in splits
             },
         }
