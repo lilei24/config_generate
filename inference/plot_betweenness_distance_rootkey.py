@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """Plot three-level grouped metrics: betweenness × distance × root key.
 
-Generates three types of visualizations:
-  1. Heatmap  — betweenness vs distance, color = metric value (per root_key)
-  2. Line     — betweenness on X, distance as hue, metric on Y (per root_key)
-  3. Bar      — distance on X, betweenness as hue, metric as bar height (per root_key / facet)
+Generates several visualization types:
+  1. Heatmap           — betweenness vs distance, color = metric (per root_key)
+  2. Heatmap-all       — same, but aggregated across all root_keys
+  3. Combined-heatmap  — rows = "root_key | dist=X", cols = betweenness (1 fig, 3 dimensions)
+  4. Line              — betweenness on X, distance as hue (per root_key)
+  5. Line-by-dist      — one subplot per distance, root_key as hue
+  6. Bar               — one subplot per root_key, X = distance, hue = betweenness (bar-grid)
+  7. Bar-all           — same, aggregated across all root_keys
 
 Input: the grouped CSV written by analyze_betweenness_distance_rootkey.py.
 """
@@ -304,6 +308,80 @@ def plot_heatmap_all(df: pd.DataFrame, metric: str, output_dir: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Plot 3: Combined heatmap — rows = "root_key | dist=X", cols = betweenness
+# ---------------------------------------------------------------------------
+
+def plot_combined_heatmap(df: pd.DataFrame, metric: str, output_dir: Path,
+                          root_keys: Optional[List[str]]) -> None:
+    """Single heatmap encoding all 3 dimensions:
+    rows    = "root_key | distance" composite labels
+    columns = betweenness_centrality_group
+    color   = metric value
+    """
+    print("[combined-heatmap] generating …", flush=True)
+    root_key_list = root_keys or sorted(df["target_top_level_key"].unique())
+
+    # Build composite row index
+    df = df.copy()
+    df["row_label"] = df["target_top_level_key"].astype(str) + "  │ dist=" + df["nearest_same_top_key_distance"].astype(str)
+
+    # Pivot: rows = composite label, cols = betweenness
+    pivot = df.pivot_table(
+        index="row_label",
+        columns="betweenness_centrality_group",
+        values=metric,
+        aggfunc="mean",
+    )
+    pivot = pivot.dropna(how="all").dropna(axis=1, how="all")
+    n_rows, n_cols = pivot.shape
+    if n_rows < 1 or n_cols < 1:
+        print("  skip: no data", flush=True)
+        return
+
+    # Sort rows by (root_key, distance) so same root_key stays together
+    def _row_sort_key(label: str) -> Tuple[str, Any]:
+        parts = label.rsplit("dist=", 1)
+        rk = parts[0].rstrip(" │\t\n\r")
+        dist_str = parts[1].strip() if len(parts) > 1 else ""
+        return (rk, _distance_sort_key(dist_str))
+
+    row_order = sorted(pivot.index, key=_row_sort_key)
+    pivot = pivot.loc[row_order]
+
+    # Figure sizing
+    cell_w, cell_h = 0.6, 0.55
+    fig_w = max(8, n_cols * cell_w + 3)
+    fig_h = max(5, n_rows * cell_h + 1.5)
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+
+    annot = n_rows * n_cols <= 80
+    vmin = pivot.min().min() if not pivot.isna().all().all() else 0.0
+    vmax = pivot.max().max() if not pivot.isna().all().all() else 1.0
+
+    # Draw group separator lines between root_keys
+    sns.heatmap(
+        pivot, annot=annot, fmt=".2f", cmap=BETWEENNESS_HEATMAP_CMAP,
+        vmin=vmin, vmax=vmax, linewidths=0.5, linecolor="#dddddd",
+        cbar_kws={"shrink": 0.7}, ax=ax,
+    )
+
+    # Add horizontal lines to separate root_key blocks
+    prev_rk = None
+    for yi, label in enumerate(row_order):
+        rk = label.rsplit("dist=", 1)[0].rstrip(" │\t\n\r")
+        if prev_rk is not None and rk != prev_rk:
+            ax.axhline(y=yi, color="#333333", linewidth=1.2)
+        prev_rk = rk
+
+    ax.set_title("%s\nroot_key × distance  |  Combined Heatmap" % _metric_label(metric), fontsize=13)
+    ax.set_xlabel("Betweenness Centrality Group")
+    ax.set_ylabel("")
+    ax.tick_params(axis="y", labelsize=8)
+    ax.tick_params(axis="x", labelsize=8, rotation=45)
+    _close_fig(fig, output_dir / "combined-heatmap" / ("combined_%s.png" % metric))
+
+
+# ---------------------------------------------------------------------------
 # Plot 3: Line chart — betweenness on X, distance as hue, metric on Y
 # ---------------------------------------------------------------------------
 
@@ -556,8 +634,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--task", default=None, help="Filter by task (e.g. node_config_qa). Default: no filter.")
     p.add_argument("--min-files", type=int, default=3,
                    help="Minimum evaluated_files per group to include. Default: 3.")
-    p.add_argument("--plots", default="heatmap,heatmap-all,line,line-by-dist,bar,bar-all",
-                   help="Which plot types to generate. Default: heatmap,heatmap-all,line,line-by-dist,bar,bar-all")
+    p.add_argument("--plots", default="combined-heatmap,heatmap,heatmap-all,line,line-by-dist,bar,bar-all",
+                   help="Which plot types to generate. Default: combined-heatmap,heatmap,heatmap-all,line,line-by-dist,bar,bar-all")
     return p.parse_args()
 
 
@@ -591,6 +669,8 @@ def main() -> None:
             plot_heatmap(df, metric, output_dir, args.root_key)
         if "heatmap-all" in plot_set:
             plot_heatmap_all(df, metric, output_dir)
+        if "combined-heatmap" in plot_set:
+            plot_combined_heatmap(df, metric, output_dir, args.root_key)
         if "line" in plot_set:
             plot_lines(df, metric, output_dir, args.root_key)
         if "line-by-dist" in plot_set:
