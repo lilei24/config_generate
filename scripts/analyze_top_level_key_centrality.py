@@ -25,14 +25,16 @@ from statistics import mean, median
 from typing import Any, DefaultDict, Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple
 
 
-DEFAULT_DATASET_ROOT = Path("/data/my_dataset")
+DEFAULT_DATASET_ROOT = Path("datasets")
 DEFAULT_OUTPUT_DIR = Path("/tmp/top_level_key_centrality")
 DEFAULT_SPLITS = "train,val"
+DEFAULT_TASKS = "node_config_qa,device_config_qa"
 DEFAULT_PROGRESS_INTERVAL = 500
 
 
 PER_NODE_FIELDS = [
     "split",
+    "task",
     "file",
     "node_id",
     "top_level_key",
@@ -42,6 +44,7 @@ PER_NODE_FIELDS = [
 
 SUMMARY_FIELDS = [
     "split",
+    "task",
     "top_level_key",
     "node_occurrences",
     "file_count",
@@ -68,14 +71,18 @@ def parse_csv_values(text: str) -> List[str]:
     return [item.strip() for item in text.split(",") if item.strip()]
 
 
-def iter_json_files(dataset_root: Path, splits: Iterable[str]) -> Iterator[Tuple[str, Path]]:
+def iter_json_files(dataset_root: Path, splits: Iterable[str], tasks: Iterable[str]) -> Iterator[Tuple[str, str, Path]]:
     for split in splits:
         split_dir = dataset_root / split
         if not split_dir.exists():
             continue
-        for path in sorted(split_dir.rglob("*.json")):
-            if path.is_file():
-                yield split, path
+        for task in tasks:
+            task_dir = split_dir / task
+            if not task_dir.exists():
+                continue
+            for path in sorted(task_dir.rglob("*.json")):
+                if path.is_file():
+                    yield split, task, path
 
 
 def load_json(path: Path) -> Tuple[Optional[Dict[str, Any]], str]:
@@ -196,24 +203,30 @@ def write_json(path: Path, data: Any) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def collect_rows(dataset_root: Path, splits: List[str], progress_interval: int) -> Tuple[List[Dict[str, Any]], Dict[Tuple[str, str], KeyCentralityStats], Dict[str, Any]]:
-    files = list(iter_json_files(dataset_root, splits))
+def collect_rows(
+    dataset_root: Path,
+    splits: List[str],
+    tasks: List[str],
+    progress_interval: int,
+) -> Tuple[List[Dict[str, Any]], Dict[Tuple[str, str, str], KeyCentralityStats], Dict[str, Any]]:
+    files = list(iter_json_files(dataset_root, splits, tasks))
     total = len(files)
     started_at = time.time()
     rows: List[Dict[str, Any]] = []
     summary: Dict[str, Any] = {
         "dataset_root": str(dataset_root),
         "splits": splits,
+        "tasks": tasks,
         "total_files": total,
         "bad_json_files": 0,
         "files_without_nodes": 0,
         "files_without_links": 0,
         "missing_split_dirs": [split for split in splits if not (dataset_root / split).exists()],
     }
-    per_key_stats: Dict[Tuple[str, str], KeyCentralityStats] = defaultdict(KeyCentralityStats)
+    per_key_stats: Dict[Tuple[str, str, str], KeyCentralityStats] = defaultdict(KeyCentralityStats)
 
     print("[key-centrality] start: %s files" % total, flush=True)
-    for index, (split, path) in enumerate(files, start=1):
+    for index, (split, task, path) in enumerate(files, start=1):
         graph, error = load_json(path)
         if error or graph is None:
             summary["bad_json_files"] += 1
@@ -241,6 +254,7 @@ def collect_rows(dataset_root: Path, splits: List[str], progress_interval: int) 
                 rows.append(
                     {
                         "split": split,
+                        "task": task,
                         "file": file_name,
                         "node_id": node_id,
                         "top_level_key": key,
@@ -248,7 +262,7 @@ def collect_rows(dataset_root: Path, splits: List[str], progress_interval: int) 
                         "betweenness_centrality": betweenness_value,
                     }
                 )
-                bucket = per_key_stats[(split, key)]
+                bucket = per_key_stats[(split, task, key)]
                 bucket.node_occurrences += 1
                 bucket.degree_values.append(degree_value)
                 bucket.betweenness_values.append(betweenness_value)
@@ -286,14 +300,15 @@ def summarize(values: List[float]) -> Dict[str, Any]:
     }
 
 
-def summary_rows(per_key_stats: Dict[Tuple[str, str], KeyCentralityStats]) -> List[Dict[str, Any]]:
+def summary_rows(per_key_stats: Dict[Tuple[str, str, str], KeyCentralityStats]) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
-    for (split, key), stats in sorted(per_key_stats.items(), key=lambda item: (item[0][0], item[0][1])):
+    for (split, task, key), stats in sorted(per_key_stats.items(), key=lambda item: (item[0][0], item[0][1], item[0][2])):
         degree_summary = summarize(stats.degree_values)
         betweenness_summary = summarize(stats.betweenness_values)
         rows.append(
             {
                 "split": split,
+                "task": task,
                 "top_level_key": key,
                 "node_occurrences": stats.node_occurrences,
                 "file_count": len(stats.files),
@@ -312,7 +327,8 @@ def summary_rows(per_key_stats: Dict[Tuple[str, str], KeyCentralityStats]) -> Li
 
 def run(args: argparse.Namespace) -> None:
     splits = parse_csv_values(args.splits)
-    rows, per_key_stats, summary = collect_rows(args.dataset_root, splits, args.progress_interval)
+    tasks = parse_csv_values(args.tasks)
+    rows, per_key_stats, summary = collect_rows(args.dataset_root, splits, tasks, args.progress_interval)
     output_dir = args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -323,9 +339,9 @@ def run(args: argparse.Namespace) -> None:
     summary.update(
         {
             "per_node_rows": len(rows),
-            "unique_keys": len({key for _, key in per_key_stats}),
+            "unique_keys": len({key for _, _, key in per_key_stats}),
             "top_keys_by_split": {
-                split: len([key for current_split, key in per_key_stats if current_split == split])
+                split: len([key for current_split, _, key in per_key_stats if current_split == split])
                 for split in splits
             },
         }
@@ -339,6 +355,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset-root", type=Path, default=DEFAULT_DATASET_ROOT, help="Dataset root containing train/ and val/ directories.")
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR, help="Directory to write analysis outputs.")
     parser.add_argument("--splits", default=DEFAULT_SPLITS, help="Comma-separated split names, e.g. train,val.")
+    parser.add_argument("--tasks", default=DEFAULT_TASKS, help="Comma-separated task dirs, e.g. node_config_qa,device_config_qa.")
     parser.add_argument("--progress-interval", type=int, default=DEFAULT_PROGRESS_INTERVAL, help="Print progress every N files. Use 0 to disable.")
     return parser.parse_args()
 
