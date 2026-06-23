@@ -255,19 +255,21 @@ def plot_heatmap(df: pd.DataFrame, metric: str, output_dir: Path,
         if n_dist < 1 or n_bc < 1:
             continue
 
+        # Reverse row order: dist=0/1 at bottom, dist=inf at top
+        pivot = pivot.iloc[::-1]
+
         cell_size = 0.65
         fig, ax = plt.subplots(figsize=(max(6, n_bc * cell_size + 2),
                                         max(4, n_dist * cell_size + 1.5)))
-        annot = n_dist * n_bc <= 60
         vmin, vmax = 0.0, 1.0
         sns.heatmap(
-            pivot, annot=annot, fmt=".2f", cmap=BETWEENNESS_HEATMAP_CMAP,
+            pivot, annot=True, fmt=".2f", cmap=BETWEENNESS_HEATMAP_CMAP,
             vmin=vmin, vmax=vmax, linewidths=0.5, linecolor="white",
             cbar_kws={"shrink": 0.8}, ax=ax,
         )
         ax.set_title("%s\n%s  |  %s" % (_metric_label(metric), rk, "Heatmap"), fontsize=13)
         ax.set_xlabel("Betweenness Centrality Group")
-        ax.set_ylabel("Nearest Same-Top-Key Distance")
+        ax.set_ylabel("Nearest Same-Top-Key Distance  (bottom → top)")
         _close_fig(fig, output_dir / "heatmap" / ("%s_%s.png" % (_safe_filename(rk), metric)))
 
 
@@ -290,20 +292,22 @@ def plot_heatmap_all(df: pd.DataFrame, metric: str, output_dir: Path) -> None:
         print("  skip: no data", flush=True)
         return
 
+    # Reverse row order: dist=0/1 at bottom, dist=inf at top
+    pivot = pivot.iloc[::-1]
+
     cell_size = 0.7
     fig, ax = plt.subplots(figsize=(max(6, n_bc * cell_size + 2),
                                     max(4, n_dist * cell_size + 1.5)))
-    annot = n_dist * n_bc <= 60
     vmin = df[metric].min() if not df[metric].isna().all() else 0.0
     vmax = df[metric].max() if not df[metric].isna().all() else 1.0
     sns.heatmap(
-        pivot, annot=annot, fmt=".2f", cmap=BETWEENNESS_HEATMAP_CMAP,
+        pivot, annot=True, fmt=".2f", cmap=BETWEENNESS_HEATMAP_CMAP,
         vmin=vmin, vmax=vmax, linewidths=0.5, linecolor="white",
         cbar_kws={"shrink": 0.8}, ax=ax,
     )
     ax.set_title("%s\nAll root keys  |  Heatmap" % _metric_label(metric), fontsize=13)
     ax.set_xlabel("Betweenness Centrality Group")
-    ax.set_ylabel("Nearest Same-Top-Key Distance")
+    ax.set_ylabel("Nearest Same-Top-Key Distance  (bottom → top)")
     _close_fig(fig, output_dir / "heatmap" / ("all_rootkeys_%s.png" % metric))
 
 
@@ -338,12 +342,15 @@ def plot_combined_heatmap(df: pd.DataFrame, metric: str, output_dir: Path,
         print("  skip: no data", flush=True)
         return
 
-    # Sort rows by (root_key, distance) so same root_key stays together
+    # Sort rows by (root_key, distance reversed) so within each
+    # root_key block distance goes bottom (0/1) → top (inf)
     def _row_sort_key(label: str) -> Tuple[str, Any]:
         parts = label.rsplit("dist=", 1)
         rk = parts[0].rstrip(" │\t\n\r")
         dist_str = parts[1].strip() if len(parts) > 1 else ""
-        return (rk, _distance_sort_key(dist_str))
+        # Negate sort key so larger distances sort first (top of heatmap)
+        dk = _distance_sort_key(dist_str)
+        return (rk, (-dk[0], -dk[1]))
 
     row_order = sorted(pivot.index, key=_row_sort_key)
     pivot = pivot.loc[row_order]
@@ -354,13 +361,11 @@ def plot_combined_heatmap(df: pd.DataFrame, metric: str, output_dir: Path,
     fig_h = max(5, n_rows * cell_h + 1.5)
     fig, ax = plt.subplots(figsize=(fig_w, fig_h))
 
-    annot = n_rows * n_cols <= 80
     vmin = pivot.min().min() if not pivot.isna().all().all() else 0.0
     vmax = pivot.max().max() if not pivot.isna().all().all() else 1.0
 
-    # Draw group separator lines between root_keys
     sns.heatmap(
-        pivot, annot=annot, fmt=".2f", cmap=BETWEENNESS_HEATMAP_CMAP,
+        pivot, annot=True, fmt=".2f", cmap=BETWEENNESS_HEATMAP_CMAP,
         vmin=vmin, vmax=vmax, linewidths=0.5, linecolor="#dddddd",
         cbar_kws={"shrink": 0.7}, ax=ax,
     )
