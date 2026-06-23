@@ -191,7 +191,7 @@ def nearest_same_top_key_stats(input_value: Any, target_id: str, target_key: str
         distance_value: Any = "inf"
     else:
         distance_value = nearest
-        group = str(nearest) if nearest <= 3 else ">3"
+        group = str(nearest)
     return {
         "target_node_found": bool(target_node is not None),
         "nearest_same_top_key_distance": distance_value,
@@ -293,13 +293,11 @@ def collect_rows(args: argparse.Namespace) -> List[Dict[str, Any]]:
 
 def group_sort_key(group: str) -> Tuple[int, Any]:
     if group == "inf":
-        return 2, group
-    if group == ">3":
-        return 1, 4
+        return 1, group
     try:
         return 0, int(group)
     except ValueError:
-        return 3, group
+        return 2, group
 
 
 def group_rows(rows: List[Dict[str, Any]], factor: str) -> List[Dict[str, Any]]:
@@ -373,7 +371,10 @@ def run(args: argparse.Namespace) -> None:
             "evaluated_files": sum(1 for row in rows if row["status"] == "ok"),
             "model_error_files": sum(1 for row in rows if row["status"] == "model_error"),
             "eval_error_files": sum(1 for row in rows if row["status"] == "eval_error"),
-            "distance_groups": ["0", "1", "2", "3", ">3", "inf"],
+            "distance_groups": (
+                "Actual shortest-path distances are used directly: 0, 1, 2, ... max, inf. "
+                "0 means the target node itself has the same top-level key."
+            ),
         },
     )
     print("[neighbor-sim] done. output: %s" % output_root, flush=True)
