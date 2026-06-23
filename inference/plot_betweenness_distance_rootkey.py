@@ -71,15 +71,33 @@ def _betweenness_sort_key(group: str) -> Tuple[int, float]:
     return (1, 0.0)
 
 
-def _distance_sort_key(group: str) -> Tuple[int, float]:
-    if group == "inf":
+def _distance_sort_key(group: Any) -> Tuple[int, float]:
+    """Sort distance groups numerically; inf last; empty/N/A last.
+
+    Handles both string 'inf' and float infinity (pandas may auto-convert)."""
+    if isinstance(group, float) and math.isinf(group):
         return (1, float("inf"))
-    if not group:
+    if isinstance(group, str) and group == "inf":
+        return (1, float("inf"))
+    if isinstance(group, (int, float, np.integer, np.floating)):
+        val = float(group)
+        if math.isinf(val):
+            return (1, float("inf"))
+        if math.isnan(val):
+            return (2, 0.0)
+        try:
+            return (0, int(val))
+        except (ValueError, OverflowError):
+            return (0, val)
+    group_str = str(group)
+    if not group_str:
         return (2, 0.0)
+    if group_str == "inf":
+        return (1, float("inf"))
     try:
-        return (0, int(group))
-    except ValueError:
-        return (2, 0.0)
+        return (0, int(group_str))
+    except (ValueError, OverflowError):
+        return (2, float("inf") if "inf" in group_str.lower() else 0.0)
 
 
 def _sorted_betweenness_groups(groups: List[str]) -> List[str]:
