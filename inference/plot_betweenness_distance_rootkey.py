@@ -171,6 +171,37 @@ def _make_annot(pivot: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(data, index=pivot.index, columns=pivot.columns)
 
 
+def _annotate_heatmap_cells(
+    ax: Any,
+    pivot: pd.DataFrame,
+    font_size: float,
+    vmin: float,
+    vmax: float,
+) -> None:
+    """Draw every non-NaN cell value manually.
+
+    Seaborn annotations can become unreliable or unreadable on very tall
+    heatmaps. Manual annotation keeps the combined view faithful to the CSV.
+    """
+
+    midpoint = (vmin + vmax) / 2 if vmax > vmin else vmin
+    for row_index in range(pivot.shape[0]):
+        for col_index in range(pivot.shape[1]):
+            value = pivot.iloc[row_index, col_index]
+            if pd.isna(value):
+                continue
+            text_color = "white" if float(value) >= midpoint else "#111111"
+            ax.text(
+                col_index + 0.5,
+                row_index + 0.5,
+                "%.2f" % value,
+                ha="center",
+                va="center",
+                fontsize=font_size,
+                color=text_color,
+            )
+
+
 # ---------------------------------------------------------------------------
 # Data loading
 # ---------------------------------------------------------------------------
@@ -336,25 +367,22 @@ def plot_combined_heatmap(df: pd.DataFrame, metric: str, output_dir: Path,
     pivot = pivot.loc[row_order]
 
     n_rows, n_cols = pivot.shape
-    # Larger cell height to ensure annotations fit
-    cell_w, cell_h = 0.65, 0.58
+    # Larger cells keep row-level numeric annotations visible in dense plots.
+    cell_w, cell_h = 0.9, 0.85
     fig_w = max(8, n_cols * cell_w + 3)
-    fig_h = max(5, n_rows * cell_h + 1.5)
+    fig_h = max(6, n_rows * cell_h + 2.0)
     fig, ax = plt.subplots(figsize=(fig_w, fig_h))
 
     vmin = pivot.min().min() if not pivot.isna().all().all() else 0.0
     vmax = pivot.max().max() if not pivot.isna().all().all() else 1.0
 
-    annot_mat = _make_annot(pivot)
-
-    # Use small font if many rows
-    font_sz = max(5, min(9, int(cell_h * 14)))
+    font_sz = max(6, min(10, int(cell_h * 12)))
     sns.heatmap(
-        pivot, annot=annot_mat, fmt="", cmap=BETWEENNESS_HEATMAP_CMAP,
+        pivot, annot=False, fmt="", cmap=BETWEENNESS_HEATMAP_CMAP,
         vmin=vmin, vmax=vmax, linewidths=0.5, linecolor="#dddddd",
         cbar_kws={"shrink": 0.7}, ax=ax,
-        annot_kws={"fontsize": font_sz},
     )
+    _annotate_heatmap_cells(ax, pivot, font_sz, float(vmin), float(vmax))
 
     # Separator lines between root_key blocks
     prev_rk = None
@@ -370,7 +398,13 @@ def plot_combined_heatmap(df: pd.DataFrame, metric: str, output_dir: Path,
     ax.set_ylabel("")
     ax.tick_params(axis="y", labelsize=8)
     ax.tick_params(axis="x", labelsize=8, rotation=45)
-    _close_fig(fig, output_dir / "combined-heatmap" / ("combined_%s.png" % metric))
+    out_base = output_dir / "combined-heatmap" / ("combined_%s" % metric)
+    out_base.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_base.with_suffix(".png"), dpi=150, bbox_inches="tight")
+    fig.savefig(out_base.with_suffix(".pdf"), bbox_inches="tight")
+    plt.close(fig)
+    print("  wrote %s" % out_base.with_suffix(".png"), flush=True)
+    print("  wrote %s" % out_base.with_suffix(".pdf"), flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -620,7 +654,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--task", default=None, help="Filter by task.")
     p.add_argument("--min-files", type=int, default=3,
                    help="Minimum evaluated_files per group. Default: 3.")
-    p.add_argument("--plots", default="combined-heatmap,heatmap,heatmap-all,line,line-by-dist,bar,bar-all",
+    p.add_argument("--plots", default="combined-heatmap",
                    help="Which plot types to generate.")
     return p.parse_args()
 
