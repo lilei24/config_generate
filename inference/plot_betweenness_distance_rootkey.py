@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Plot three-level grouped metrics: betweenness × distance × root key.
 
-Generates several visualization types:
+Visualizations:
   1. Heatmap           — betweenness vs distance, color = metric (per root_key)
-  2. Heatmap-all       — same, but aggregated across all root_keys
-  3. Combined-heatmap  — rows = "root_key | dist=X", cols = betweenness (1 fig, 3 dimensions)
+  2. Heatmap-all       — same, aggregated across all root_keys
+  3. Combined-heatmap  — rows = "root_key | dist=X", cols = betweenness (3 dims)
   4. Line              — betweenness on X, distance as hue (per root_key)
   5. Line-by-dist      — one subplot per distance, root_key as hue
-  6. Bar               — one subplot per root_key, X = distance, hue = betweenness (bar-grid)
+  6. Bar               — one subplot per root_key, X = distance, hue = betweenness
   7. Bar-all           — same, aggregated across all root_keys
 
 Input: the grouped CSV written by analyze_betweenness_distance_rootkey.py.
@@ -23,27 +23,22 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import matplotlib
 import matplotlib.pyplot as plt
-import matplotlib.ticker as mticker
 import numpy as np
 import pandas as pd
 import seaborn as sns
 
 
 # ---------------------------------------------------------------------------
-# Color palettes
+# Palette
 # ---------------------------------------------------------------------------
 
+BETWEENNESS_HEATMAP_CMAP = "YlOrRd"
+
 DISTANCE_PALETTE = {
-    "0": "#1b9e77",
-    "1": "#7570b3",
-    "2": "#d95f02",
-    "3": "#e7298a",
-    "4": "#66a61e",
-    "5": "#e6ab02",
+    "0": "#1b9e77", "1": "#7570b3", "2": "#d95f02",
+    "3": "#e7298a", "4": "#66a61e", "5": "#e6ab02",
     "inf": "#a6761d",
 }
-
-BETWEENNESS_HEATMAP_CMAP = "YlOrRd"
 
 
 # ---------------------------------------------------------------------------
@@ -51,7 +46,6 @@ BETWEENNESS_HEATMAP_CMAP = "YlOrRd"
 # ---------------------------------------------------------------------------
 
 def _read_grouped_csv(path: Path) -> pd.DataFrame:
-    """Read the grouped metrics CSV and coerce numeric columns."""
     df = pd.read_csv(path)
     for col in [
         "field_path_precision", "field_path_recall", "field_path_f1",
@@ -76,9 +70,6 @@ def _betweenness_sort_key(group: str) -> Tuple[int, float]:
 
 
 def _distance_sort_key(group: Any) -> Tuple[int, float]:
-    """Sort distance groups numerically; inf last; empty/N/A last.
-
-    Handles both string 'inf' and float infinity (pandas may auto-convert)."""
     if isinstance(group, float) and math.isinf(group):
         return (1, float("inf"))
     if isinstance(group, str) and group == "inf":
@@ -109,31 +100,28 @@ def _sorted_betweenness_groups(groups: List[str]) -> List[str]:
 
 
 def _sorted_distance_groups(groups: List[str]) -> List[str]:
-    return sorted(set(groups), key=_distance_sort_key)
+    return sorted(set(str(g) for g in groups), key=_distance_sort_key)
 
 
 def _pick_distance_colors(distances: List[str]) -> Dict[str, str]:
-    """Return a fixed color mapping for the given distance labels."""
     cmap = plt.colormaps.get_cmap("tab10")
     mapping: Dict[str, str] = {}
     for idx, dist in enumerate(distances):
         if dist in DISTANCE_PALETTE:
             mapping[dist] = DISTANCE_PALETTE[dist]
         else:
-            color = matplotlib.colors.to_hex(cmap(idx % 10))
-            mapping[dist] = color
+            mapping[dist] = matplotlib.colors.to_hex(cmap(idx % 10))
     return mapping
 
 
 def _setup_chinese_font() -> None:
-    """Try to configure a CJK-capable font so Chinese labels render correctly."""
     for family in ("Noto Sans CJK SC", "WenQuanYi Micro Hei", "SimHei", "Microsoft YaHei"):
         for fpath in matplotlib.font_manager.findSystemFonts():
             if family.lower().replace(" ", "") in Path(fpath).name.lower().replace(" ", ""):
                 matplotlib.font_manager.fontManager.addfont(fpath)
-                plt.rcParams["font.family"] = matplotlib.font_manager.FontProperties(fname=fpath).get_name()
+                plt.rcParams["font.family"] = \
+                    matplotlib.font_manager.FontProperties(fname=fpath).get_name()
                 return
-    # Fallback: just let seaborn pick the default; Chinese will render as tofu if unsupported.
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         plt.rcParams["font.family"] = "sans-serif"
@@ -162,8 +150,29 @@ def _close_fig(fig: Any, path: Path) -> None:
     print("  wrote %s" % path, flush=True)
 
 
+def _safe_filename(text: str) -> str:
+    return text.replace("/", "_").replace("\\", "_").replace("|", "_").replace(" ", "_")
+
+
 # ---------------------------------------------------------------------------
-# Data loading + filtering
+# Annotation helper: every non-NaN cell gets a number
+# ---------------------------------------------------------------------------
+
+def _make_annot(pivot: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame of annotation strings: NaN → '', value → '%.2f'."""
+    n_rows, n_cols = pivot.shape
+    data: List[List[str]] = []
+    for r in range(n_rows):
+        row_vals: List[str] = []
+        for c in range(n_cols):
+            v = pivot.iloc[r, c]
+            row_vals.append("" if pd.isna(v) else "%.2f" % v)
+        data.append(row_vals)
+    return pd.DataFrame(data, index=pivot.index, columns=pivot.columns)
+
+
+# ---------------------------------------------------------------------------
+# Data loading
 # ---------------------------------------------------------------------------
 
 REQUIRED_COLUMNS = [
@@ -180,19 +189,13 @@ def load_data(csv_path: Path, metric: str, split: Optional[str], task: Optional[
     missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
     if missing:
         raise ValueError(
-            "CSV is missing required columns: %s\n"
-            "Available columns: %s\n"
-            "This plot script expects output from analyze_betweenness_distance_rootkey.py."
+            "CSV missing columns: %s\nAvailable: %s\n"
+            "Expected output from analyze_betweenness_distance_rootkey.py."
             % (missing, list(df.columns))
         )
-
     if metric not in df.columns:
-        raise ValueError(
-            "Metric column '%s' not found in CSV. Available: %s"
-            % (metric, [c for c in df.columns if c not in ("split", "task")][:20])
-        )
+        raise ValueError("Metric '%s' not found. Available: %s" % (metric, list(df.columns)))
 
-    # Filter
     if split:
         df = df[df["split"] == split]
     if task:
@@ -201,107 +204,96 @@ def load_data(csv_path: Path, metric: str, split: Optional[str], task: Optional[
         df = df[df["target_top_level_key"].isin(root_keys)]
 
     if df.empty:
-        raise ValueError("No rows after filtering — check --split / --task / --root-key")
+        raise ValueError("No rows after filtering.")
 
-    # Drop rows where metric is missing
+    # Drop rows where metric is NaN
     df = df.dropna(subset=[metric])
 
-    # Filter out groups with too few samples (unreliable metrics)
+    # Filter by sample count
     df = df[df["evaluated_files"] >= min_files]
 
-    # Drop betweenness groups that have no distance data (e.g. multi-key answers)
+    # Drop rows without distance info
     df = df[df["nearest_same_top_key_distance"].notna()]
-    df = df[df["nearest_same_top_key_distance"] != ""]
+    df = df[df["nearest_same_top_key_distance"].astype(str).str.strip() != ""]
 
     if df.empty:
-        raise ValueError("No valid rows after filtering — try lowering --min-files")
+        raise ValueError("No valid rows — try lowering --min-files")
 
-    # Sort distance groups
-    dist_order = _sorted_distance_groups(df["nearest_same_top_key_distance"].unique().tolist())
-    bc_order = _sorted_betweenness_groups(df["betweenness_centrality_group"].unique().tolist())
-
-    df["nearest_same_top_key_distance"] = pd.Categorical(
-        df["nearest_same_top_key_distance"], categories=dist_order, ordered=True
-    )
-    df["betweenness_centrality_group"] = pd.Categorical(
-        df["betweenness_centrality_group"], categories=bc_order, ordered=True
-    )
+    # Normalize distance to string
+    df["nearest_same_top_key_distance"] = df["nearest_same_top_key_distance"].astype(str)
 
     return df
 
 
 # ---------------------------------------------------------------------------
-# Plot 1: Heatmap  — betweenness vs distance, color = metric (per root_key)
+# Plot 1: Heatmap (per root_key)
 # ---------------------------------------------------------------------------
 
 def plot_heatmap(df: pd.DataFrame, metric: str, output_dir: Path,
                  root_keys: Optional[List[str]]) -> None:
     print("[heatmap] generating …", flush=True)
-    root_key_list = root_keys or sorted(df["target_top_level_key"].unique())
-    for rk in root_key_list:
+    rk_list = root_keys or sorted(df["target_top_level_key"].unique())
+    for rk in rk_list:
         sub = df[df["target_top_level_key"] == rk]
         if sub.empty:
             continue
         pivot = sub.pivot_table(
             index="nearest_same_top_key_distance",
             columns="betweenness_centrality_group",
-            values=metric,
-            aggfunc="mean",
+            values=metric, aggfunc="mean",
         )
-        # Remove all-NaN rows/cols
         pivot = pivot.dropna(how="all").dropna(axis=1, how="all")
-        n_dist = pivot.shape[0]
-        n_bc = pivot.shape[1]
-        if n_dist < 1 or n_bc < 1:
+        if pivot.shape[0] < 1 or pivot.shape[1] < 1:
             continue
 
-        # Reverse row order: dist=0/1 at bottom, dist=inf at top
-        pivot = pivot.iloc[::-1]
+        # Sort rows: small distance at bottom, inf at top
+        row_order = sorted(pivot.index, key=_distance_sort_key)
+        pivot = pivot.loc[row_order].iloc[::-1]
 
+        annot_mat = _make_annot(pivot)
+        n_dist, n_bc = pivot.shape
         cell_size = 0.65
         fig, ax = plt.subplots(figsize=(max(6, n_bc * cell_size + 2),
                                         max(4, n_dist * cell_size + 1.5)))
-        vmin, vmax = 0.0, 1.0
         sns.heatmap(
-            pivot, annot=True, fmt=".2f", cmap=BETWEENNESS_HEATMAP_CMAP,
-            vmin=vmin, vmax=vmax, linewidths=0.5, linecolor="white",
+            pivot, annot=annot_mat, fmt="", cmap=BETWEENNESS_HEATMAP_CMAP,
+            vmin=0.0, vmax=1.0, linewidths=0.5, linecolor="white",
             cbar_kws={"shrink": 0.8}, ax=ax,
         )
-        ax.set_title("%s\n%s  |  %s" % (_metric_label(metric), rk, "Heatmap"), fontsize=13)
+        ax.set_title("%s\n%s  |  Heatmap" % (_metric_label(metric), rk), fontsize=13)
         ax.set_xlabel("Betweenness Centrality Group")
         ax.set_ylabel("Nearest Same-Top-Key Distance  (bottom → top)")
         _close_fig(fig, output_dir / "heatmap" / ("%s_%s.png" % (_safe_filename(rk), metric)))
 
 
 # ---------------------------------------------------------------------------
-# Plot 2: Joint heatmap — all root_keys stacked, annotated with sample counts
+# Plot 2: Heatmap-all (all root_keys)
 # ---------------------------------------------------------------------------
 
 def plot_heatmap_all(df: pd.DataFrame, metric: str, output_dir: Path) -> None:
-    """Single heatmap across all root_keys (pivot mean)."""
     print("[heatmap-all] generating …", flush=True)
     pivot = df.pivot_table(
         index="nearest_same_top_key_distance",
         columns="betweenness_centrality_group",
-        values=metric,
-        aggfunc="mean",
+        values=metric, aggfunc="mean",
     )
     pivot = pivot.dropna(how="all").dropna(axis=1, how="all")
-    n_dist, n_bc = pivot.shape
-    if n_dist < 1 or n_bc < 1:
+    if pivot.shape[0] < 1 or pivot.shape[1] < 1:
         print("  skip: no data", flush=True)
         return
 
-    # Reverse row order: dist=0/1 at bottom, dist=inf at top
-    pivot = pivot.iloc[::-1]
+    row_order = sorted(pivot.index, key=_distance_sort_key)
+    pivot = pivot.loc[row_order].iloc[::-1]
 
+    annot_mat = _make_annot(pivot)
+    n_dist, n_bc = pivot.shape
     cell_size = 0.7
     fig, ax = plt.subplots(figsize=(max(6, n_bc * cell_size + 2),
                                     max(4, n_dist * cell_size + 1.5)))
     vmin = df[metric].min() if not df[metric].isna().all() else 0.0
     vmax = df[metric].max() if not df[metric].isna().all() else 1.0
     sns.heatmap(
-        pivot, annot=True, fmt=".2f", cmap=BETWEENNESS_HEATMAP_CMAP,
+        pivot, annot=annot_mat, fmt="", cmap=BETWEENNESS_HEATMAP_CMAP,
         vmin=vmin, vmax=vmax, linewidths=0.5, linecolor="white",
         cbar_kws={"shrink": 0.8}, ax=ax,
     )
@@ -317,46 +309,35 @@ def plot_heatmap_all(df: pd.DataFrame, metric: str, output_dir: Path) -> None:
 
 def plot_combined_heatmap(df: pd.DataFrame, metric: str, output_dir: Path,
                           root_keys: Optional[List[str]]) -> None:
-    """Single heatmap encoding all 3 dimensions:
-    rows    = "root_key | distance" composite labels
-    columns = betweenness_centrality_group
-    color   = metric value
-    """
     print("[combined-heatmap] generating …", flush=True)
-    root_key_list = root_keys or sorted(df["target_top_level_key"].unique())
 
-    # Build composite row index
     df = df.copy()
-    df["row_label"] = df["target_top_level_key"].astype(str) + "  │ dist=" + df["nearest_same_top_key_distance"].astype(str)
+    df["row_label"] = (df["target_top_level_key"].astype(str)
+                       + "  │ dist=" + df["nearest_same_top_key_distance"].astype(str))
 
-    # Pivot: rows = composite label, cols = betweenness
     pivot = df.pivot_table(
-        index="row_label",
-        columns="betweenness_centrality_group",
-        values=metric,
-        aggfunc="mean",
+        index="row_label", columns="betweenness_centrality_group",
+        values=metric, aggfunc="mean",
     )
     pivot = pivot.dropna(how="all").dropna(axis=1, how="all")
-    n_rows, n_cols = pivot.shape
-    if n_rows < 1 or n_cols < 1:
+    if pivot.shape[0] < 1 or pivot.shape[1] < 1:
         print("  skip: no data", flush=True)
         return
 
-    # Sort rows by (root_key, distance reversed) so within each
-    # root_key block distance goes bottom (0/1) → top (inf)
+    # Sort: within each root_key, bottom=small dist, top=inf
     def _row_sort_key(label: str) -> Tuple[str, Any]:
         parts = label.rsplit("dist=", 1)
         rk = parts[0].rstrip(" │\t\n\r")
         dist_str = parts[1].strip() if len(parts) > 1 else ""
-        # Negate sort key so larger distances sort first (top of heatmap)
         dk = _distance_sort_key(dist_str)
         return (rk, (-dk[0], -dk[1]))
 
     row_order = sorted(pivot.index, key=_row_sort_key)
     pivot = pivot.loc[row_order]
 
-    # Figure sizing
-    cell_w, cell_h = 0.6, 0.55
+    n_rows, n_cols = pivot.shape
+    # Larger cell height to ensure annotations fit
+    cell_w, cell_h = 0.65, 0.58
     fig_w = max(8, n_cols * cell_w + 3)
     fig_h = max(5, n_rows * cell_h + 1.5)
     fig, ax = plt.subplots(figsize=(fig_w, fig_h))
@@ -364,13 +345,18 @@ def plot_combined_heatmap(df: pd.DataFrame, metric: str, output_dir: Path,
     vmin = pivot.min().min() if not pivot.isna().all().all() else 0.0
     vmax = pivot.max().max() if not pivot.isna().all().all() else 1.0
 
+    annot_mat = _make_annot(pivot)
+
+    # Use small font if many rows
+    font_sz = max(5, min(9, int(cell_h * 14)))
     sns.heatmap(
-        pivot, annot=True, fmt=".2f", cmap=BETWEENNESS_HEATMAP_CMAP,
+        pivot, annot=annot_mat, fmt="", cmap=BETWEENNESS_HEATMAP_CMAP,
         vmin=vmin, vmax=vmax, linewidths=0.5, linecolor="#dddddd",
         cbar_kws={"shrink": 0.7}, ax=ax,
+        annot_kws={"fontsize": font_sz},
     )
 
-    # Add horizontal lines to separate root_key blocks
+    # Separator lines between root_key blocks
     prev_rk = None
     for yi, label in enumerate(row_order):
         rk = label.rsplit("dist=", 1)[0].rstrip(" │\t\n\r")
@@ -378,7 +364,8 @@ def plot_combined_heatmap(df: pd.DataFrame, metric: str, output_dir: Path,
             ax.axhline(y=yi, color="#333333", linewidth=1.2)
         prev_rk = rk
 
-    ax.set_title("%s\nroot_key × distance  |  Combined Heatmap" % _metric_label(metric), fontsize=13)
+    ax.set_title("%s\nroot_key × distance  |  Combined Heatmap" % _metric_label(metric),
+                 fontsize=13)
     ax.set_xlabel("Betweenness Centrality Group")
     ax.set_ylabel("")
     ax.tick_params(axis="y", labelsize=8)
@@ -387,23 +374,22 @@ def plot_combined_heatmap(df: pd.DataFrame, metric: str, output_dir: Path,
 
 
 # ---------------------------------------------------------------------------
-# Plot 3: Line chart — betweenness on X, distance as hue, metric on Y
+# Plot 4: Line
 # ---------------------------------------------------------------------------
 
 def plot_lines(df: pd.DataFrame, metric: str, output_dir: Path,
                root_keys: Optional[List[str]]) -> None:
     print("[line] generating …", flush=True)
-    root_key_list = root_keys or sorted(df["target_top_level_key"].unique())
-    dist_groups = _sorted_distance_groups(df["nearest_same_top_key_distance"].unique().tolist())
+    rk_list = root_keys or sorted(df["target_top_level_key"].unique())
+    dist_groups = _sorted_distance_groups(df["nearest_same_top_key_distance"].unique())
     dist_colors = _pick_distance_colors(dist_groups)
 
-    for rk in root_key_list:
+    for rk in rk_list:
         sub = df[df["target_top_level_key"] == rk]
         if sub.empty:
             continue
-        # Aggregate mean per (betweenness, distance)
         agg = sub.groupby(["betweenness_centrality_group", "nearest_same_top_key_distance"],
-                           observed=True)[metric].mean().reset_index()
+                           observed=False)[metric].mean().reset_index()
         agg = agg.dropna(subset=[metric])
         if agg.empty:
             continue
@@ -416,7 +402,6 @@ def plot_lines(df: pd.DataFrame, metric: str, output_dir: Path,
             dsub = agg[agg["nearest_same_top_key_distance"] == dist]
             if dsub.empty:
                 continue
-            # Align to x_pos
             values = []
             valid_x = []
             for xi, bc_label in enumerate(bc_labels):
@@ -441,19 +426,18 @@ def plot_lines(df: pd.DataFrame, metric: str, output_dir: Path,
 
 
 # ---------------------------------------------------------------------------
-# Plot 4: Line chart — all root keys overlaid, distance as subplot
+# Plot 5: Line-by-dist
 # ---------------------------------------------------------------------------
 
 def plot_lines_by_distance(df: pd.DataFrame, metric: str, output_dir: Path,
                            root_keys: Optional[List[str]]) -> None:
-    """One line per root_key, one subplot per distance group."""
     print("[line-by-dist] generating …", flush=True)
-    root_key_list = root_keys or sorted(df["target_top_level_key"].unique())
-    if len(root_key_list) > 12:
-        print("  skip: too many root keys (%d) for overlaid view" % len(root_key_list), flush=True)
+    rk_list = root_keys or sorted(df["target_top_level_key"].unique())
+    if len(rk_list) > 12:
+        print("  skip: too many root keys (%d) for overlaid view" % len(rk_list), flush=True)
         return
 
-    dist_groups = _sorted_distance_groups(df["nearest_same_top_key_distance"].unique().tolist())
+    dist_groups = _sorted_distance_groups(df["nearest_same_top_key_distance"].unique())
     ncols = min(3, len(dist_groups))
     nrows = math.ceil(len(dist_groups) / ncols)
 
@@ -468,19 +452,19 @@ def plot_lines_by_distance(df: pd.DataFrame, metric: str, output_dir: Path,
             ax.set_title("dist=%s (no data)" % dist)
             continue
         bc_labels = _sorted_betweenness_groups(sub["betweenness_centrality_group"].unique().tolist())
-        for ri, rk in enumerate(root_key_list):
+        for ri, rk in enumerate(rk_list):
             rsub = sub[sub["target_top_level_key"] == rk]
-            agg = rsub.groupby("betweenness_centrality_group", observed=True)[metric].mean()
+            agg = rsub.groupby("betweenness_centrality_group",
+                               observed=False)[metric].mean()
             values = [agg.get(bc, np.nan) for bc in bc_labels]
-            ax.plot(range(len(bc_labels)), values, marker="o", linewidth=1.5, markersize=4,
-                    color=cmap(ri % 10), label=rk[:25])
+            ax.plot(range(len(bc_labels)), values, marker="o", linewidth=1.5,
+                    markersize=4, color=cmap(ri % 10), label=rk[:25])
         ax.set_xticks(range(len(bc_labels)))
         ax.set_xticklabels(bc_labels, rotation=45, ha="right", fontsize=7)
         ax.set_ylim(0, 1)
         ax.set_title("distance = %s" % dist, fontsize=11)
         ax.grid(True, alpha=0.3)
 
-    # Hide unused subplots
     for di in range(len(dist_groups), nrows * ncols):
         axes[di // ncols][di % ncols].set_visible(False)
 
@@ -496,56 +480,58 @@ def plot_lines_by_distance(df: pd.DataFrame, metric: str, output_dir: Path,
 
 
 # ---------------------------------------------------------------------------
-# Plot 5: Bar chart — distance on X, betweenness as hue (per root_key facet)
+# Plot 6: Bar grid (per root_key)
 # ---------------------------------------------------------------------------
 
 def plot_bars(df: pd.DataFrame, metric: str, output_dir: Path,
               root_keys: Optional[List[str]]) -> None:
     print("[bar] generating …", flush=True)
-    root_key_list = root_keys or sorted(df["target_top_level_key"].unique())
+    rk_list = root_keys or sorted(df["target_top_level_key"].unique())
     bc_groups = _sorted_betweenness_groups(df["betweenness_centrality_group"].unique().tolist())
     bc_palette = dict(zip(bc_groups, sns.color_palette("Set2", len(bc_groups))))
 
-    # Determine grid
-    n = len(root_key_list)
+    n = len(rk_list)
     ncols = min(3, n)
     nrows = math.ceil(n / ncols)
     fig, axes = plt.subplots(nrows, ncols, figsize=(5.5 * ncols, 4 * nrows),
                               squeeze=False, sharey=True)
 
-    for ri, rk in enumerate(root_key_list):
+    for ri, rk in enumerate(rk_list):
         ax = axes[ri // ncols][ri % ncols]
         sub = df[df["target_top_level_key"] == rk]
         if sub.empty:
             ax.set_title(rk[:30] + " (no data)")
             continue
         agg = sub.groupby(["nearest_same_top_key_distance", "betweenness_centrality_group"],
-                           observed=True)[metric].mean().reset_index()
+                           observed=False)[metric].mean().reset_index()
         agg = agg.dropna(subset=[metric])
         if agg.empty:
             ax.set_title(rk[:30] + " (no data)")
             continue
-        dist_labels = _sorted_distance_groups(agg["nearest_same_top_key_distance"].unique().tolist())
+        dist_labels = _sorted_distance_groups(agg["nearest_same_top_key_distance"].unique())
         x_pos = range(len(dist_labels))
         bar_width = 0.8 / len(bc_groups)
 
         for bi, bc in enumerate(bc_groups):
             values = []
-            for di, dist in enumerate(dist_labels):
+            for dist in dist_labels:
                 match = agg[(agg["nearest_same_top_key_distance"] == dist) &
                              (agg["betweenness_centrality_group"] == bc)]
                 values.append(match[metric].iloc[0] if not match.empty else np.nan)
             offset = (bi - (len(bc_groups) - 1) / 2) * bar_width
-            ax.bar([p + offset for p in x_pos], values, bar_width * 0.9,
-                   color=bc_palette[bc], label=bc)
+            bars = ax.bar([p + offset for p in x_pos], values, bar_width * 0.9,
+                          color=bc_palette[bc], label=bc)
+            for bar_obj, v in zip(bars, values):
+                if not np.isnan(v):
+                    ax.text(bar_obj.get_x() + bar_obj.get_width() / 2, v + 0.01,
+                            "%.2f" % v, ha="center", va="bottom", fontsize=6)
 
         ax.set_xticks(x_pos)
         ax.set_xticklabels(dist_labels, fontsize=9)
         ax.set_title(rk[:30], fontsize=10)
-        ax.set_ylim(0, 1)
+        ax.set_ylim(0, 1.08)
         ax.grid(True, axis="y", alpha=0.3)
 
-    # Hide unused subplots
     for ri in range(n, nrows * ncols):
         axes[ri // ncols][ri % ncols].set_visible(False)
 
@@ -561,53 +547,48 @@ def plot_bars(df: pd.DataFrame, metric: str, output_dir: Path,
 
 
 # ---------------------------------------------------------------------------
-# Plot 6: Aggregate bar — distance on X, betweenness as hue (all root keys)
+# Plot 7: Bar-all
 # ---------------------------------------------------------------------------
 
 def plot_bars_all(df: pd.DataFrame, metric: str, output_dir: Path) -> None:
-    """Single bar chart averaged across all root keys."""
     print("[bar-all] generating …", flush=True)
     bc_groups = _sorted_betweenness_groups(df["betweenness_centrality_group"].unique().tolist())
     bc_palette = dict(zip(bc_groups, sns.color_palette("Set2", len(bc_groups))))
     agg = df.groupby(["nearest_same_top_key_distance", "betweenness_centrality_group"],
-                      observed=True)[metric].mean().reset_index()
+                      observed=False)[metric].mean().reset_index()
     agg = agg.dropna(subset=[metric])
     if agg.empty:
         print("  skip: no data", flush=True)
         return
 
-    dist_labels = _sorted_distance_groups(agg["nearest_same_top_key_distance"].unique().tolist())
+    dist_labels = _sorted_distance_groups(agg["nearest_same_top_key_distance"].unique())
     x_pos = range(len(dist_labels))
     bar_width = 0.8 / len(bc_groups)
     fig, ax = plt.subplots(figsize=(max(8, len(dist_labels) * 1.2), 5))
 
     for bi, bc in enumerate(bc_groups):
-        values = []
+        values: List[float] = []
         for dist in dist_labels:
             match = agg[(agg["nearest_same_top_key_distance"] == dist) &
                          (agg["betweenness_centrality_group"] == bc)]
             values.append(match[metric].iloc[0] if not match.empty else np.nan)
         offset = (bi - (len(bc_groups) - 1) / 2) * bar_width
-        ax.bar([p + offset for p in x_pos], values, bar_width * 0.9,
-               color=bc_palette[bc], label=bc)
+        bars = ax.bar([p + offset for p in x_pos], values, bar_width * 0.9,
+                      color=bc_palette[bc], label=bc)
+        for bar_obj, v in zip(bars, values):
+            if not np.isnan(v):
+                ax.text(bar_obj.get_x() + bar_obj.get_width() / 2, v + 0.005,
+                        "%.2f" % v, ha="center", va="bottom", fontsize=6, rotation=90)
 
     ax.set_xticks(x_pos)
     ax.set_xticklabels(dist_labels, fontsize=10)
     ax.set_ylabel(_metric_label(metric))
     ax.set_xlabel("Nearest Same-Top-Key Distance")
     ax.set_title("%s\nAll Root Keys  |  Bar" % _metric_label(metric), fontsize=13)
-    ax.set_ylim(0, 1)
+    ax.set_ylim(0, 1.08)
     ax.legend(title="Betweenness", fontsize=8, title_fontsize=9)
     ax.grid(True, axis="y", alpha=0.3)
     _close_fig(fig, output_dir / "bar" / ("all_rootkeys_%s.png" % metric))
-
-
-# ---------------------------------------------------------------------------
-# Misc
-# ---------------------------------------------------------------------------
-
-def _safe_filename(text: str) -> str:
-    return text.replace("/", "_").replace("\\", "_").replace("|", "_").replace(" ", "_")
 
 
 # ---------------------------------------------------------------------------
@@ -632,15 +613,15 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--output-dir", type=Path, default=None,
                    help="Output directory for plots. Default: sibling of CSV / plots/.")
     p.add_argument("--metrics", default="field_path_f1,leaf_triple_f1,value_accuracy",
-                   help="Comma-separated metric names. Default: field_path_f1,leaf_triple_f1,value_accuracy")
+                   help="Comma-separated metric names.")
     p.add_argument("--root-key", action="append", default=None,
-                   help="Filter to specific root key(s). Repeatable. Default: all.")
-    p.add_argument("--split", default=None, help="Filter by split (e.g. val). Default: no filter.")
-    p.add_argument("--task", default=None, help="Filter by task (e.g. node_config_qa). Default: no filter.")
+                   help="Filter to specific root key(s). Repeatable.")
+    p.add_argument("--split", default=None, help="Filter by split.")
+    p.add_argument("--task", default=None, help="Filter by task.")
     p.add_argument("--min-files", type=int, default=3,
-                   help="Minimum evaluated_files per group to include. Default: 3.")
+                   help="Minimum evaluated_files per group. Default: 3.")
     p.add_argument("--plots", default="combined-heatmap,heatmap,heatmap-all,line,line-by-dist,bar,bar-all",
-                   help="Which plot types to generate. Default: combined-heatmap,heatmap,heatmap-all,line,line-by-dist,bar,bar-all")
+                   help="Which plot types to generate.")
     return p.parse_args()
 
 
