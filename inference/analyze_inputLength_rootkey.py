@@ -23,6 +23,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from statistics import mean, median
 from typing import Any, DefaultDict, Dict, Iterable, List, Optional, Tuple
+from xml.sax.saxutils import escape
 
 
 DEFAULT_RESULT_ROOT = Path("inference-results")
@@ -34,6 +35,7 @@ DEFAULT_PRED_KEYS = "model-output,model_output,model-ouput"
 DEFAULT_GOLD_KEY = "answer"
 DEFAULT_PROGRESS_INTERVAL = 500
 DEFAULT_INPUT_LENGTH_THRESHOLDS = "4096,8192,16384,32768,65536,131072,262144,524288"
+DEFAULT_PLOT_METRIC = "leaf_triple_f1"
 
 
 METRIC_FIELDS = [
@@ -841,6 +843,225 @@ def strip_internal_fields(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
+# Heatmap
+# ---------------------------------------------------------------------------
+
+
+def metric_label(metric: str) -> str:
+    labels = {
+        "field_path_precision": "Field Path Precision",
+        "field_path_recall": "Field Path Recall",
+        "field_path_f1": "Field Path F1",
+        "leaf_triple_precision": "Leaf Triple Precision",
+        "leaf_triple_recall": "Leaf Triple Recall",
+        "leaf_triple_f1": "Leaf Triple F1",
+        "value_accuracy": "Value Accuracy",
+        "hallucinated_rate": "Hallucinated Rate",
+        "missing_rate": "Missing Rate",
+        "top_level_exact_match": "Top-Level Exact Match",
+    }
+    return labels.get(metric, metric)
+
+
+def metric_value(row: Dict[str, Any], metric: str) -> Optional[float]:
+    value = row.get(metric)
+    if value in ("", None):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(number):
+        return None
+    return number
+
+
+def color_for_value(value: Optional[float], vmin: float, vmax: float) -> str:
+    if value is None:
+        return "#f3f4f6"
+    if vmax <= vmin:
+        ratio = 1.0
+    else:
+        ratio = max(0.0, min(1.0, (value - vmin) / (vmax - vmin)))
+    # Light yellow -> orange-red, close to YlOrRd but dependency-free.
+    stops = [
+        (255, 247, 188),
+        (254, 196, 79),
+        (240, 59, 32),
+        (153, 0, 13),
+    ]
+    scaled = ratio * (len(stops) - 1)
+    left = int(math.floor(scaled))
+    right = min(left + 1, len(stops) - 1)
+    weight = scaled - left
+    rgb = tuple(
+        int(stops[left][idx] * (1 - weight) + stops[right][idx] * weight)
+        for idx in range(3)
+    )
+    return "#%02x%02x%02x" % rgb
+
+
+def text_color_for_value(value: Optional[float], vmin: float, vmax: float) -> str:
+    if value is None:
+        return "#6b7280"
+    midpoint = (vmin + vmax) / 2 if vmax > vmin else vmin
+    return "white" if value >= midpoint else "#111827"
+
+
+def build_heatmap_matrix(
+    grouped_rows: List[Dict[str, Any]],
+    metric: str,
+    min_files: int,
+) -> Tuple[List[str], List[str], Dict[Tuple[str, str], Dict[str, Any]]]:
+    columns = sorted(
+        {
+            (str(row["input_token_group"]), row.get("range_min", ""))
+            for row in grouped_rows
+        },
+        key=lambda item: _range_sort_key(item[0], item[1]),
+    )
+    column_labels = [label for label, _ in columns]
+
+    row_totals: Counter = Counter()
+    cells: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    for row in grouped_rows:
+        evaluated = int(row.get("evaluated_files", 0) or 0)
+        if evaluated < min_files:
+            continue
+        root_key = str(row.get("target_top_level_key", ""))
+        length_group = str(row.get("input_token_group", ""))
+        value = metric_value(row, metric)
+        row_totals[root_key] += evaluated
+        cells[(root_key, length_group)] = {
+            "value": value,
+            "evaluated_files": evaluated,
+            "total_files": int(row.get("total_files", 0) or 0),
+        }
+
+    root_keys = sorted(row_totals, key=lambda key: (-row_totals[key], key))
+    return root_keys, column_labels, cells
+
+
+def write_input_length_rootkey_heatmap(
+    path: Path,
+    grouped_rows: List[Dict[str, Any]],
+    metric: str,
+    min_files: int,
+) -> None:
+    if metric not in METRIC_FIELDS:
+        raise ValueError("Unknown plot metric '%s'. Available: %s" % (metric, ", ".join(METRIC_FIELDS)))
+
+    root_keys, column_labels, cells = build_heatmap_matrix(grouped_rows, metric, min_files)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not root_keys or not column_labels:
+        path.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg" width="720" height="120">'
+            '<rect width="100%" height="100%" fill="white"/>'
+            '<text x="24" y="64" font-family="Arial" font-size="16" fill="#111827">'
+            'No heatmap data. Try lowering --heatmap-min-files.</text></svg>\n',
+            encoding="utf-8",
+        )
+        return
+
+    values = [
+        cell["value"]
+        for cell in cells.values()
+        if cell.get("value") is not None
+    ]
+    vmin = min(values) if values else 0.0
+    vmax = max(values) if values else 1.0
+    if math.isclose(vmin, vmax):
+        vmin = 0.0
+        vmax = 1.0
+
+    cell_w = 92
+    cell_h = 30
+    left = 300
+    top = 95
+    right = 40
+    bottom = 45
+    width = left + len(column_labels) * cell_w + right
+    height = top + len(root_keys) * cell_h + bottom
+
+    elements = [
+        '<svg xmlns="http://www.w3.org/2000/svg" width="%s" height="%s" viewBox="0 0 %s %s">'
+        % (width, height, width, height),
+        '<rect width="100%" height="100%" fill="white"/>',
+        '<text x="24" y="32" font-family="Arial" font-size="18" font-weight="700" fill="#111827">%s</text>'
+        % escape("Input Length × Root Key Heatmap"),
+        '<text x="24" y="56" font-family="Arial" font-size="13" fill="#374151">metric: %s, min evaluated files per cell: %s</text>'
+        % (escape(metric_label(metric)), min_files),
+    ]
+
+    for col_index, label in enumerate(column_labels):
+        x = left + col_index * cell_w + cell_w / 2
+        elements.append(
+            '<text x="%.1f" y="%s" font-family="Arial" font-size="11" text-anchor="end" '
+            'fill="#111827" transform="rotate(-35 %.1f %s)">%s</text>'
+            % (x, top - 10, x, top - 10, escape(label))
+        )
+
+    for row_index, root_key in enumerate(root_keys):
+        y = top + row_index * cell_h
+        label = root_key if len(root_key) <= 42 else root_key[:39] + "..."
+        elements.append(
+            '<text x="%s" y="%.1f" font-family="Arial" font-size="11" text-anchor="end" '
+            'dominant-baseline="middle" fill="#111827"><title>%s</title>%s</text>'
+            % (left - 8, y + cell_h / 2, escape(root_key), escape(label))
+        )
+        for col_index, length_group in enumerate(column_labels):
+            x = left + col_index * cell_w
+            cell = cells.get((root_key, length_group), {})
+            value = cell.get("value")
+            fill = color_for_value(value, vmin, vmax)
+            title = "%s | %s | %s: %s | evaluated=%s | total=%s" % (
+                root_key,
+                length_group,
+                metric,
+                "" if value is None else "%.4f" % value,
+                cell.get("evaluated_files", 0),
+                cell.get("total_files", 0),
+            )
+            elements.append(
+                '<rect x="%s" y="%s" width="%s" height="%s" fill="%s" stroke="white" stroke-width="1">'
+                '<title>%s</title></rect>'
+                % (x, y, cell_w, cell_h, fill, escape(title))
+            )
+            if value is not None:
+                elements.append(
+                    '<text x="%.1f" y="%.1f" font-family="Arial" font-size="11" text-anchor="middle" '
+                    'dominant-baseline="middle" fill="%s">%.2f</text>'
+                    % (x + cell_w / 2, y + cell_h / 2, text_color_for_value(value, vmin, vmax), value)
+                )
+
+    legend_x = left
+    legend_y = height - 24
+    legend_w = 220
+    segments = 20
+    for index in range(segments):
+        value = vmin + (vmax - vmin) * index / max(1, segments - 1)
+        elements.append(
+            '<rect x="%.1f" y="%s" width="%.1f" height="12" fill="%s"/>'
+            % (
+                legend_x + index * legend_w / segments,
+                legend_y,
+                legend_w / segments,
+                color_for_value(value, vmin, vmax),
+            )
+        )
+    elements.append(
+        '<text x="%s" y="%s" font-family="Arial" font-size="10" fill="#374151">%.2f</text>'
+        % (legend_x, legend_y + 27, vmin)
+    )
+    elements.append(
+        '<text x="%s" y="%s" font-family="Arial" font-size="10" text-anchor="end" fill="#374151">%.2f</text>'
+        % (legend_x + legend_w, legend_y + 27, vmax)
+    )
+    elements.append("</svg>")
+    path.write_text("\n".join(elements) + "\n", encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -849,6 +1070,9 @@ def run(args: argparse.Namespace) -> None:
     thresholds = parse_int_csv(args.input_length_thresholds)
     rows = collect_rows(args, thresholds)
     output_root = args.output_root
+    input_length_rows = group_by_input_length(rows)
+    input_length_rootkey_rows = group_by_input_length_rootkey(rows)
+    top_level_key_rows = group_by_rootkey(rows)
 
     write_csv(
         output_root / "per_file_input_length_rootkey.csv",
@@ -857,19 +1081,26 @@ def run(args: argparse.Namespace) -> None:
     )
     write_csv(
         output_root / "input_length_metrics.csv",
-        group_by_input_length(rows),
+        input_length_rows,
         GROUP_FIELDS,
     )
     write_csv(
         output_root / "input_length_rootkey_metrics.csv",
-        group_by_input_length_rootkey(rows),
+        input_length_rootkey_rows,
         ROOTKEY_GROUP_FIELDS,
     )
     write_csv(
         output_root / "top_level_key_input_length_metrics.csv",
-        group_by_rootkey(rows),
+        top_level_key_rows,
         TOP_KEY_FIELDS,
     )
+    if not args.no_heatmap:
+        write_input_length_rootkey_heatmap(
+            output_root / "input_length_rootkey_heatmap.svg",
+            input_length_rootkey_rows,
+            args.plot_metric,
+            args.heatmap_min_files,
+        )
     write_json(
         output_root / "summary.json",
         {
@@ -882,6 +1113,13 @@ def run(args: argparse.Namespace) -> None:
             "evaluated_files": sum(1 for row in rows if row["status"] == "ok"),
             "model_error_files": sum(1 for row in rows if row["status"] == "model_error"),
             "eval_error_files": sum(1 for row in rows if row["status"] == "eval_error"),
+            "heatmap": None
+            if args.no_heatmap
+            else {
+                "file": str(output_root / "input_length_rootkey_heatmap.svg"),
+                "metric": args.plot_metric,
+                "min_files": args.heatmap_min_files,
+            },
             "grouping": (
                 "input_token_group is computed from QA sample input serialized as compact JSON. "
                 "Metrics are micro-aggregated inside each group by accumulating TP/pred_total/gold_total."
@@ -902,6 +1140,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gold-key", default=DEFAULT_GOLD_KEY)
     parser.add_argument("--array-mode", choices=["wildcard", "index"], default="wildcard")
     parser.add_argument("--input-length-thresholds", default=DEFAULT_INPUT_LENGTH_THRESHOLDS)
+    parser.add_argument("--plot-metric", default=DEFAULT_PLOT_METRIC, help="Metric used in heatmap color.")
+    parser.add_argument("--heatmap-min-files", type=int, default=1, help="Minimum evaluated files per heatmap cell.")
+    parser.add_argument("--no-heatmap", action="store_true", help="Disable SVG heatmap output.")
     parser.add_argument("--progress-interval", type=int, default=DEFAULT_PROGRESS_INTERVAL)
     parser.add_argument("--limit", type=int, default=0, help="Only process first N files. 0 means all.")
     return parser.parse_args()
