@@ -537,6 +537,28 @@ def input_token_group(token_count: int, thresholds: List[int]) -> Tuple[str, int
     return f">{lower}", lower + 1, ""
 
 
+def compact_token_label(value: Any) -> str:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if number == 0:
+        return "0"
+    if number % 1000 == 0:
+        return f"{number // 1000}k"
+    if number >= 1000:
+        return f"{number / 1000:.1f}k".rstrip("0").rstrip(".")
+    return str(number)
+
+
+def compact_token_group_label(group: str, range_min: Any, range_max: Any) -> str:
+    if str(group).startswith(">"):
+        return f">{compact_token_label(str(group)[1:])}"
+    if range_max in ("", None):
+        return str(group)
+    return f"{compact_token_label(range_min)}-{compact_token_label(range_max)}"
+
+
 def input_length_values(input_value: Any) -> Dict[str, Any]:
     text = stable_json_text(input_value)
     return {
@@ -912,15 +934,19 @@ def build_heatmap_matrix(
     grouped_rows: List[Dict[str, Any]],
     metric: str,
     min_files: int,
-) -> Tuple[List[str], List[str], Dict[Tuple[str, str], Dict[str, Any]]]:
+) -> Tuple[List[str], List[str], Dict[str, str], Dict[Tuple[str, str], Dict[str, Any]]]:
     columns = sorted(
         {
-            (str(row["input_token_group"]), row.get("range_min", ""))
+            (str(row["input_token_group"]), row.get("range_min", ""), row.get("range_max", ""))
             for row in grouped_rows
         },
         key=lambda item: _range_sort_key(item[0], item[1]),
     )
-    column_labels = [label for label, _ in columns]
+    column_labels = [label for label, _, _ in columns]
+    column_display_labels = {
+        label: compact_token_group_label(label, range_min, range_max)
+        for label, range_min, range_max in columns
+    }
 
     row_totals: Counter = Counter()
     cells: Dict[Tuple[str, str], Dict[str, Any]] = {}
@@ -939,7 +965,7 @@ def build_heatmap_matrix(
         }
 
     root_keys = sorted(row_totals, key=lambda key: (-row_totals[key], key))
-    return root_keys, column_labels, cells
+    return root_keys, column_labels, column_display_labels, cells
 
 
 def write_input_length_rootkey_heatmap(
@@ -951,7 +977,7 @@ def write_input_length_rootkey_heatmap(
     if metric not in METRIC_FIELDS:
         raise ValueError("Unknown plot metric '%s'. Available: %s" % (metric, ", ".join(METRIC_FIELDS)))
 
-    root_keys, column_labels, cells = build_heatmap_matrix(grouped_rows, metric, min_files)
+    root_keys, column_labels, column_display_labels, cells = build_heatmap_matrix(grouped_rows, metric, min_files)
     path.parent.mkdir(parents=True, exist_ok=True)
     if not root_keys or not column_labels:
         path.write_text(
@@ -963,23 +989,15 @@ def write_input_length_rootkey_heatmap(
         )
         return
 
-    values = [
-        cell["value"]
-        for cell in cells.values()
-        if cell.get("value") is not None
-    ]
-    vmin = min(values) if values else 0.0
-    vmax = max(values) if values else 1.0
-    if math.isclose(vmin, vmax):
-        vmin = 0.0
-        vmax = 1.0
+    vmin = 0.0
+    vmax = 1.0
 
-    cell_w = 92
-    cell_h = 30
+    cell_w = 104
+    cell_h = 36
     left = 300
-    top = 95
-    right = 40
-    bottom = 45
+    top = 105
+    right = 60
+    bottom = 82
     width = left + len(column_labels) * cell_w + right
     height = top + len(root_keys) * cell_h + bottom
 
@@ -996,9 +1014,9 @@ def write_input_length_rootkey_heatmap(
     for col_index, label in enumerate(column_labels):
         x = left + col_index * cell_w + cell_w / 2
         elements.append(
-            '<text x="%.1f" y="%s" font-family="Arial" font-size="11" text-anchor="end" '
-            'fill="#111827" transform="rotate(-35 %.1f %s)">%s</text>'
-            % (x, top - 10, x, top - 10, escape(label))
+            '<text x="%.1f" y="%s" font-family="Arial" font-size="12" text-anchor="middle" '
+            'fill="#111827">%s</text>'
+            % (x, top - 14, escape(column_display_labels.get(label, label)))
         )
 
     for row_index, root_key in enumerate(root_keys):
@@ -1028,16 +1046,27 @@ def write_input_length_rootkey_heatmap(
                 % (x, y, cell_w, cell_h, fill, escape(title))
             )
             if value is not None:
+                evaluated_files = int(cell.get("evaluated_files", 0) or 0)
                 elements.append(
                     '<text x="%.1f" y="%.1f" font-family="Arial" font-size="11" text-anchor="middle" '
                     'dominant-baseline="middle" fill="%s">%.2f</text>'
-                    % (x + cell_w / 2, y + cell_h / 2, text_color_for_value(value, vmin, vmax), value)
+                    % (x + cell_w / 2, y + cell_h / 2 - 5, text_color_for_value(value, vmin, vmax), value)
+                )
+                elements.append(
+                    '<text x="%.1f" y="%.1f" font-family="Arial" font-size="9" text-anchor="middle" '
+                    'dominant-baseline="middle" fill="%s">(n=%s)</text>'
+                    % (
+                        x + cell_w / 2,
+                        y + cell_h / 2 + 8,
+                        text_color_for_value(value, vmin, vmax),
+                        evaluated_files,
+                    )
                 )
 
     legend_x = left
-    legend_y = height - 24
-    legend_w = 220
-    segments = 20
+    legend_y = height - 54
+    legend_w = 300
+    segments = 50
     for index in range(segments):
         value = vmin + (vmax - vmin) * index / max(1, segments - 1)
         elements.append(
@@ -1050,12 +1079,22 @@ def write_input_length_rootkey_heatmap(
             )
         )
     elements.append(
-        '<text x="%s" y="%s" font-family="Arial" font-size="10" fill="#374151">%.2f</text>'
-        % (legend_x, legend_y + 27, vmin)
+        '<text x="%s" y="%s" font-family="Arial" font-size="11" fill="#111827">%s</text>'
+        % (legend_x, legend_y - 8, escape(metric_label(metric)))
     )
+    for tick in [0.0, 0.25, 0.5, 0.75, 1.0]:
+        tick_x = legend_x + tick * legend_w
+        elements.append(
+            '<line x1="%.1f" y1="%s" x2="%.1f" y2="%s" stroke="#374151" stroke-width="1"/>'
+            % (tick_x, legend_y + 12, tick_x, legend_y + 17)
+        )
+        elements.append(
+            '<text x="%.1f" y="%s" font-family="Arial" font-size="10" text-anchor="middle" fill="#374151">%.2g</text>'
+            % (tick_x, legend_y + 31, tick)
+        )
     elements.append(
-        '<text x="%s" y="%s" font-family="Arial" font-size="10" text-anchor="end" fill="#374151">%.2f</text>'
-        % (legend_x + legend_w, legend_y + 27, vmax)
+        '<text x="%s" y="%s" font-family="Arial" font-size="10" fill="#6b7280">cell text: metric, sample count</text>'
+        % (legend_x + legend_w + 30, legend_y + 11)
     )
     elements.append("</svg>")
     path.write_text("\n".join(elements) + "\n", encoding="utf-8")
