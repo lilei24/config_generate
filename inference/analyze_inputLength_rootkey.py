@@ -923,6 +923,26 @@ def color_for_value(value: Optional[float], vmin: float, vmax: float) -> str:
     return "#%02x%02x%02x" % rgb
 
 
+def wrap_text(text: str, max_chars: int) -> List[str]:
+    words = text.split()
+    if not words:
+        return []
+    lines: List[str] = []
+    current = ""
+    for word in words:
+        if not current:
+            current = word
+            continue
+        if len(current) + 1 + len(word) <= max_chars:
+            current = f"{current} {word}"
+        else:
+            lines.append(current)
+            current = word
+    if current:
+        lines.append(current)
+    return lines
+
+
 def text_color_for_value(value: Optional[float], vmin: float, vmax: float) -> str:
     if value is None:
         return "#6b7280"
@@ -973,6 +993,7 @@ def write_input_length_rootkey_heatmap(
     grouped_rows: List[Dict[str, Any]],
     metric: str,
     min_files: int,
+    info: str = "",
 ) -> None:
     if metric not in METRIC_FIELDS:
         raise ValueError("Unknown plot metric '%s'. Available: %s" % (metric, ", ".join(METRIC_FIELDS)))
@@ -997,7 +1018,8 @@ def write_input_length_rootkey_heatmap(
     left = 300
     top = 105
     right = 60
-    bottom = 82
+    info_lines = wrap_text(info.strip(), 110) if info.strip() else []
+    bottom = 82 + len(info_lines) * 16
     width = left + len(column_labels) * cell_w + right
     height = top + len(root_keys) * cell_h + bottom
 
@@ -1096,6 +1118,17 @@ def write_input_length_rootkey_heatmap(
         '<text x="%s" y="%s" font-family="Arial" font-size="10" fill="#6b7280">cell text: metric, sample count</text>'
         % (legend_x + legend_w + 30, legend_y + 11)
     )
+    if info_lines:
+        info_y = legend_y + 50
+        elements.append(
+            '<text x="%s" y="%s" font-family="Arial" font-size="11" font-weight="700" fill="#111827">Info</text>'
+            % (24, info_y)
+        )
+        for line_index, line in enumerate(info_lines):
+            elements.append(
+                '<text x="%s" y="%s" font-family="Arial" font-size="11" fill="#374151">%s</text>'
+                % (62, info_y + line_index * 16, escape(line))
+            )
     elements.append("</svg>")
     path.write_text("\n".join(elements) + "\n", encoding="utf-8")
 
@@ -1139,6 +1172,7 @@ def run(args: argparse.Namespace) -> None:
             input_length_rootkey_rows,
             args.plot_metric,
             args.heatmap_min_files,
+            args.heatmap_info,
         )
     write_json(
         output_root / "summary.json",
@@ -1158,6 +1192,7 @@ def run(args: argparse.Namespace) -> None:
                 "file": str(output_root / "input_length_rootkey_heatmap.svg"),
                 "metric": args.plot_metric,
                 "min_files": args.heatmap_min_files,
+                "info": args.heatmap_info,
             },
             "grouping": (
                 "input_token_group is computed from QA sample input serialized as compact JSON. "
@@ -1181,6 +1216,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--input-length-thresholds", default=DEFAULT_INPUT_LENGTH_THRESHOLDS)
     parser.add_argument("--plot-metric", default=DEFAULT_PLOT_METRIC, help="Metric used in heatmap color.")
     parser.add_argument("--heatmap-min-files", type=int, default=1, help="Minimum evaluated files per heatmap cell.")
+    parser.add_argument("--heatmap-info", default="", help="Free-form text rendered in the heatmap bottom whitespace.")
     parser.add_argument("--no-heatmap", action="store_true", help="Disable SVG heatmap output.")
     parser.add_argument("--progress-interval", type=int, default=DEFAULT_PROGRESS_INTERVAL)
     parser.add_argument("--limit", type=int, default=0, help="Only process first N files. 0 means all.")
