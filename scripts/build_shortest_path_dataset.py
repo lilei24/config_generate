@@ -9,9 +9,9 @@ datasets/
 
 输出数据集会保留 train/val 结构。每个输出 JSON 保留原始图结构，并在顶层新增：
 
-- task_source_node: 源节点 id
-- task_target_node: 目标节点 id
-- task_answer: 所有最短路径答案
+- task_source_node_name: 源节点名称
+- task_target_node_name: 目标节点名称
+- task_answer: 最短路径长度和所有最短节点名称路径
 
 如果一张图无法找到连通的源/目标节点对，则跳过该 JSON，并把原因写入
 build_issues.jsonl。
@@ -100,39 +100,50 @@ def load_json(path: Path) -> tuple[dict[str, Any] | None, str]:
     return data, ""
 
 
-def get_node_ids(graph: dict[str, Any]) -> list[str]:
+def get_device(node: dict[str, Any]) -> dict[str, Any]:
+    device = node.get("device")
+    if device is None:
+        device = node.get("devices", {})
+    return device if isinstance(device, dict) else {}
+
+
+def get_node_ids_and_names(graph: dict[str, Any]) -> tuple[list[str], dict[str, str]]:
     nodes = graph.get("nodes")
     if not isinstance(nodes, list):
-        return []
+        return [], {}
 
     node_ids: list[str] = []
+    node_name_by_id: dict[str, str] = {}
     for node in nodes:
         if not isinstance(node, dict):
             continue
         node_id = node.get("id")
         if node_id is not None:
-            node_ids.append(str(node_id))
-    return node_ids
+            node_id_str = str(node_id)
+            device = get_device(node)
+            node_name = device.get("NAME")
+            node_ids.append(node_id_str)
+            node_name_by_id[node_id_str] = str(node_name) if node_name is not None else node_id_str
+    return node_ids, node_name_by_id
 
 
 def build_adjacency(
     graph: dict[str, Any],
     node_id_set: set[str],
-) -> tuple[dict[str, set[str]], dict[tuple[str, str], list[dict[str, Any]]]]:
-    """根据 links 构造邻接表和边信息索引。
+) -> dict[str, set[str]]:
+    """根据 links 构造邻接表。
 
-    directed=false 时按无向图处理，并为反向路径保存同一条原始 link。
+    directed=false 时按无向图处理。
     """
 
     directed = bool(graph.get("directed", False))
     adjacency: dict[str, set[str]] = {node_id: set() for node_id in node_id_set}
-    link_lookup: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
 
     links = graph.get("links")
     if not isinstance(links, list):
-        return adjacency, link_lookup
+        return adjacency
 
-    for index, link_item in enumerate(links):
+    for link_item in links:
         if not isinstance(link_item, dict):
             continue
         source = link_item.get("source")
@@ -144,25 +155,12 @@ def build_adjacency(
         if source_id not in node_id_set or target_id not in node_id_set:
             continue
 
-        normalized_link = {
-            "path_source": source_id,
-            "path_target": target_id,
-            "source": source_id,
-            "target": target_id,
-            "link_index": index,
-            "link": link_item.get("link", {}),
-        }
         adjacency[source_id].add(target_id)
-        link_lookup[(source_id, target_id)].append(normalized_link)
 
         if not directed:
             adjacency[target_id].add(source_id)
-            reverse_link = copy.deepcopy(normalized_link)
-            reverse_link["path_source"] = target_id
-            reverse_link["path_target"] = source_id
-            link_lookup[(target_id, source_id)].append(reverse_link)
 
-    return adjacency, link_lookup
+    return adjacency
 
 
 def all_shortest_node_paths(
@@ -209,48 +207,17 @@ def all_shortest_node_paths(
     return sorted(paths)
 
 
-def links_for_node_path(
-    node_path: list[str],
-    link_lookup: dict[tuple[str, str], list[dict[str, Any]]],
-) -> list[list[dict[str, Any]]]:
-    """把一条节点路径展开为链路路径。
-
-    如果两个相邻节点之间存在多条平行链路，会输出所有链路组合。
-    """
-
-    if len(node_path) <= 1:
-        return [[]]
-
-    link_paths: list[list[dict[str, Any]]] = [[]]
-    for left, right in zip(node_path, node_path[1:]):
-        candidate_links = link_lookup.get((left, right), [])
-        if not candidate_links:
-            return []
-        next_link_paths: list[list[dict[str, Any]]] = []
-        for existing_path in link_paths:
-            for link_item in candidate_links:
-                next_link_paths.append([*existing_path, copy.deepcopy(link_item)])
-        link_paths = next_link_paths
-    return link_paths
-
-
 def build_answer(
     node_paths: list[list[str]],
-    link_lookup: dict[tuple[str, str], list[dict[str, Any]]],
+    node_name_by_id: dict[str, str],
 ) -> dict[str, Any]:
-    shortest_paths = []
-    for node_path in node_paths:
-        for link_path in links_for_node_path(node_path, link_lookup):
-            shortest_paths.append(
-                {
-                    "nodes": node_path,
-                    "links": link_path,
-                }
-            )
-    shortest_paths = sorted(shortest_paths, key=lambda item: json.dumps(item, sort_keys=True))
+    shortest_paths = [
+        [node_name_by_id.get(node_id, node_id) for node_id in node_path]
+        for node_path in node_paths
+    ]
     return {
         "path_length": len(node_paths[0]) - 1 if node_paths else None,
-        "shortest_paths": shortest_paths,
+        "paths": sorted(shortest_paths),
     }
 
 
@@ -298,11 +265,11 @@ def process_file(
     if graph is None:
         return False, f"load-json-error: {error}"
 
-    node_ids = get_node_ids(graph)
+    node_ids, node_name_by_id = get_node_ids_and_names(graph)
     if len(node_ids) < 2:
         return False, "not-enough-nodes"
 
-    adjacency, link_lookup = build_adjacency(graph, set(node_ids))
+    adjacency = build_adjacency(graph, set(node_ids))
     if not any(adjacency.values()):
         return False, "no-valid-links"
 
@@ -316,9 +283,9 @@ def process_file(
         return False, "no-connected-node-pair-found"
 
     task_graph = copy.deepcopy(graph)
-    task_graph["task_source_node"] = source
-    task_graph["task_target_node"] = target
-    task_graph["task_answer"] = build_answer(node_paths, link_lookup)
+    task_graph["task_source_node_name"] = node_name_by_id.get(source, source)
+    task_graph["task_target_node_name"] = node_name_by_id.get(target, target)
+    task_graph["task_answer"] = build_answer(node_paths, node_name_by_id)
     task_graph["task_metadata"] = {
         "task_name": "shortest_path_between_two_nodes",
         "split": split,
