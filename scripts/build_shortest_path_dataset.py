@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import csv
 import json
 import random
 from collections import defaultdict, deque
@@ -260,18 +261,18 @@ def process_file(
     rng: random.Random,
     max_attempts: int,
     indent: int,
-) -> tuple[bool, str]:
+) -> tuple[bool, str, dict[str, Any] | None]:
     graph, error = load_json(input_path)
     if graph is None:
-        return False, f"load-json-error: {error}"
+        return False, f"load-json-error: {error}", None
 
     node_ids, node_name_by_id = get_node_ids_and_names(graph)
     if len(node_ids) < 2:
-        return False, "not-enough-nodes"
+        return False, "not-enough-nodes", None
 
     adjacency = build_adjacency(graph, set(node_ids))
     if not any(adjacency.values()):
-        return False, "no-valid-links"
+        return False, "no-valid-links", None
 
     source, target, node_paths = choose_connected_node_pair(
         node_ids=node_ids,
@@ -280,7 +281,7 @@ def process_file(
         max_attempts=max_attempts,
     )
     if source is None or target is None or not node_paths:
-        return False, "no-connected-node-pair-found"
+        return False, "no-connected-node-pair-found", None
 
     task_graph = copy.deepcopy(graph)
     task_graph["task_source_node_name"] = node_name_by_id.get(source, source)
@@ -292,7 +293,28 @@ def process_file(
         "source_file": input_path.name,
     }
     write_json(output_path, task_graph, indent=indent)
-    return True, ""
+    return True, "", {
+        "split": split,
+        "file": str(input_path),
+        "output_file": str(output_path),
+        "shortest_path_length": len(node_paths[0]) - 1,
+        "shortest_path_count": len(node_paths),
+    }
+
+
+def write_stats_csv(output_root: Path, rows: list[dict[str, Any]]) -> None:
+    stats_path = output_root / "shortest_path_stats.csv"
+    fieldnames = [
+        "split",
+        "file",
+        "output_file",
+        "shortest_path_length",
+        "shortest_path_count",
+    ]
+    with stats_path.open("w", encoding="utf-8", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
 
 
 def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
@@ -309,6 +331,7 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
         "seed": args.seed,
         "max_attempts_per_graph": args.max_attempts_per_graph,
     }
+    stats_rows: list[dict[str, Any]] = []
 
     for split in args.splits:
         input_files = iter_json_files(args.dataset_root, split)
@@ -322,7 +345,7 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
         for index, input_path in enumerate(input_files, start=1):
             relative_path = input_path.relative_to(args.dataset_root / split)
             output_path = args.output_root / split / relative_path
-            ok, reason = process_file(
+            ok, reason, stats_row = process_file(
                 input_path=input_path,
                 output_path=output_path,
                 split=split,
@@ -332,6 +355,8 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
             )
             if ok:
                 split_summary["built_files"] += 1
+                if stats_row is not None:
+                    stats_rows.append(stats_row)
             else:
                 split_summary["skipped_files"] += 1
                 append_issue(
@@ -353,6 +378,7 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
         summary["splits"][split] = split_summary
 
     write_json(args.output_root / "build_summary.json", summary, indent=2)
+    write_stats_csv(args.output_root, stats_rows)
     return summary
 
 
