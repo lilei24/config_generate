@@ -1,6 +1,10 @@
 .agents/
 .codex/
+agent/
 .temp/
 config_generation_dataset/
+shortest_path_dataset/
 QA/
 QA_token_analysis/
+__pycache__/
+*.pyc
