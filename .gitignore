@@ -4,6 +4,7 @@ agent/
 .temp/
 config_generation_dataset/
 shortest_path_dataset/
+nearest_core_dataset/
 QA/
 QA_token_analysis/
 __pycache__/
