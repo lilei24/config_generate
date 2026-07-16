@@ -5,6 +5,7 @@ agent/
 config_generation_dataset/
 shortest_path_dataset/
 nearest_core_dataset/
+node_failure_reroute_dataset/
 opencode-results/
 opencode-harness-workspace/
 QA/
