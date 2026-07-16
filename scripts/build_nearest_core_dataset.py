@@ -7,9 +7,11 @@ datasets/
   train/*.json
   val/*.json
 
-每个输出 JSON 完整保留原始拓扑，并在顶层增加任务源节点、自然语言问题、
-标准答案和任务元数据。源节点严格选择 DEVICEROLE=AP 的节点，目标核心设备
-严格选择 DEVICEROLE=CORE 的节点；Gateway+CORE 等复合角色不计入目标集合。
+一次运行会生成两套内容一一对应的数据集：with_answer 保留标准答案，
+without_answer 删除标准答案。每个输出 JSON 完整保留原始拓扑，并在顶层增加
+任务源节点、自然语言问题和任务元数据。源节点严格选择 DEVICEROLE=AP 的节点，
+目标核心设备严格选择 DEVICEROLE=CORE 的节点；Gateway+CORE 等复合角色不计入
+目标集合。
 
 如果多个核心设备与源节点的距离相同且均为最近核心，则全部保留，并输出到
 每个最近核心的全部最短节点路径。没有 AP、没有 CORE 或二者均不连通的图会被
@@ -33,6 +35,8 @@ DEFAULT_OUTPUT_ROOT = Path("nearest_core_dataset")
 DEFAULT_RANDOM_SEED = 20260715
 DEFAULT_SPLITS = ("train", "val")
 DEFAULT_PROGRESS_INTERVAL = 100
+WITH_ANSWER_DIR_NAME = "with_answer"
+WITHOUT_ANSWER_DIR_NAME = "without_answer"
 
 
 def parse_args() -> argparse.Namespace:
@@ -299,7 +303,8 @@ def append_issue(output_root: Path, issue: dict[str, Any]) -> None:
 
 def process_file(
     input_path: Path,
-    output_path: Path,
+    output_path_with_answer: Path,
+    output_path_without_answer: Path,
     split: str,
     rng: random.Random,
     indent: int,
@@ -356,12 +361,17 @@ def process_file(
         "split": split,
         "source_file": input_path.name,
     }
-    write_json(output_path, task_graph, indent=indent)
+    # 两个版本必须从同一个完整样本派生，避免再次随机选择源节点造成内容偏差。
+    write_json(output_path_with_answer, task_graph, indent=indent)
+    task_graph_without_answer = copy.deepcopy(task_graph)
+    task_graph_without_answer.pop("task_answer", None)
+    write_json(output_path_without_answer, task_graph_without_answer, indent=indent)
 
     return True, "", {
         "split": split,
         "file": str(input_path),
-        "output_file": str(output_path),
+        "output_file_with_answer": str(output_path_with_answer),
+        "output_file_without_answer": str(output_path_without_answer),
         "source_node_name": source_name,
         "nearest_core_count": len(nearest_core_ids),
         "shortest_path_length": path_length,
@@ -374,7 +384,8 @@ def write_stats_csv(output_root: Path, rows: list[dict[str, Any]]) -> None:
     fieldnames = [
         "split",
         "file",
-        "output_file",
+        "output_file_with_answer",
+        "output_file_without_answer",
         "source_node_name",
         "nearest_core_count",
         "shortest_path_length",
@@ -396,6 +407,8 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
     summary: dict[str, Any] = {
         "dataset_root": str(args.dataset_root),
         "output_root": str(args.output_root),
+        "with_answer_root": str(args.output_root / WITH_ANSWER_DIR_NAME),
+        "without_answer_root": str(args.output_root / WITHOUT_ANSWER_DIR_NAME),
         "splits": {},
         "seed": args.seed,
         "source_role": "AP",
@@ -414,10 +427,16 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
 
         for index, input_path in enumerate(input_files, start=1):
             relative_path = input_path.relative_to(args.dataset_root / split)
-            output_path = args.output_root / split / relative_path
+            output_path_with_answer = (
+                args.output_root / WITH_ANSWER_DIR_NAME / split / relative_path
+            )
+            output_path_without_answer = (
+                args.output_root / WITHOUT_ANSWER_DIR_NAME / split / relative_path
+            )
             ok, reason, stats_row = process_file(
                 input_path=input_path,
-                output_path=output_path,
+                output_path_with_answer=output_path_with_answer,
+                output_path_without_answer=output_path_without_answer,
                 split=split,
                 rng=rng,
                 indent=args.indent,

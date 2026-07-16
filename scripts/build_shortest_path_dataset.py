@@ -7,7 +7,12 @@ datasets/
   train/*.json
   val/*.json
 
-输出数据集会保留 train/val 结构。每个输出 JSON 保留原始图结构，并在顶层新增：
+一次运行会生成两套内容一一对应的数据集：
+
+- with_answer: 保留 task_answer，供 Harness 评分使用
+- without_answer: 删除 task_answer，供 Agent 执行任务使用
+
+两套数据集都会保留 train/val 结构。每个输出 JSON 保留原始图结构，并在顶层新增：
 
 - task_source_node_name: 源节点名称
 - task_target_node_name: 目标节点名称
@@ -35,6 +40,8 @@ DEFAULT_RANDOM_SEED = 20260715
 DEFAULT_SPLITS = ("train", "val")
 DEFAULT_MAX_ATTEMPTS_PER_GRAPH = 100
 DEFAULT_PROGRESS_INTERVAL = 100
+WITH_ANSWER_DIR_NAME = "with_answer"
+WITHOUT_ANSWER_DIR_NAME = "without_answer"
 
 
 def parse_args() -> argparse.Namespace:
@@ -256,7 +263,8 @@ def append_issue(output_root: Path, issue: dict[str, Any]) -> None:
 
 def process_file(
     input_path: Path,
-    output_path: Path,
+    output_path_with_answer: Path,
+    output_path_without_answer: Path,
     split: str,
     rng: random.Random,
     max_attempts: int,
@@ -292,11 +300,16 @@ def process_file(
         "split": split,
         "source_file": input_path.name,
     }
-    write_json(output_path, task_graph, indent=indent)
+    # 两个版本必须由同一个已完成随机选择的样本派生，保证除答案字段外完全一致。
+    write_json(output_path_with_answer, task_graph, indent=indent)
+    task_graph_without_answer = copy.deepcopy(task_graph)
+    task_graph_without_answer.pop("task_answer", None)
+    write_json(output_path_without_answer, task_graph_without_answer, indent=indent)
     return True, "", {
         "split": split,
         "file": str(input_path),
-        "output_file": str(output_path),
+        "output_file_with_answer": str(output_path_with_answer),
+        "output_file_without_answer": str(output_path_without_answer),
         "shortest_path_length": len(node_paths[0]) - 1,
         "shortest_path_count": len(node_paths),
     }
@@ -307,7 +320,8 @@ def write_stats_csv(output_root: Path, rows: list[dict[str, Any]]) -> None:
     fieldnames = [
         "split",
         "file",
-        "output_file",
+        "output_file_with_answer",
+        "output_file_without_answer",
         "shortest_path_length",
         "shortest_path_count",
     ]
@@ -327,6 +341,8 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
     summary: dict[str, Any] = {
         "dataset_root": str(args.dataset_root),
         "output_root": str(args.output_root),
+        "with_answer_root": str(args.output_root / WITH_ANSWER_DIR_NAME),
+        "without_answer_root": str(args.output_root / WITHOUT_ANSWER_DIR_NAME),
         "splits": {},
         "seed": args.seed,
         "max_attempts_per_graph": args.max_attempts_per_graph,
@@ -344,10 +360,16 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
 
         for index, input_path in enumerate(input_files, start=1):
             relative_path = input_path.relative_to(args.dataset_root / split)
-            output_path = args.output_root / split / relative_path
+            output_path_with_answer = (
+                args.output_root / WITH_ANSWER_DIR_NAME / split / relative_path
+            )
+            output_path_without_answer = (
+                args.output_root / WITHOUT_ANSWER_DIR_NAME / split / relative_path
+            )
             ok, reason, stats_row = process_file(
                 input_path=input_path,
-                output_path=output_path,
+                output_path_with_answer=output_path_with_answer,
+                output_path_without_answer=output_path_without_answer,
                 split=split,
                 rng=rng,
                 max_attempts=args.max_attempts_per_graph,
