@@ -2,84 +2,49 @@
 """统计原始数据集中每张图的最大有限最短路长度。
 
 “最大有限最短路长度”定义为：一张图中所有可达节点对的最短路径长度的最大值。
-路径长度按链路跳数计算。对于不连通图，只比较各个可达节点对，不把不可达距离
-视为无穷；存在有效节点但没有可达的不同节点对时，结果记为 0。
+路径长度按链路跳数计算。对于不连通图，只比较可达节点对；存在有效节点但没有
+任何有效链路时，结果记为 0。
 
-默认输入目录结构：
-
-datasets/
-  train/*.json
-  val/*.json
-
-脚本参考 analyze_dataset.py 的输出形式，生成 dataset_summary.json、
-graph_stats.csv 和 data_quality_issues.jsonl，不保存具体路径。
+输出格式参考 link_field_stats.py：只生成一个格式化 JSON 文件，顶层包含全局
+汇总 summary 和逐图结果 per_file，并在终端打印进度、耗时、ETA 和长度分布。
 """
 
 from __future__ import annotations
 
 import argparse
-import csv
 import json
+import time
 from collections import Counter, deque
 from dataclasses import dataclass
 from pathlib import Path
 from statistics import mean
-from typing import Any, Iterable
+from typing import Any, Dict, Iterable, List, Tuple
 
 
 DEFAULT_DATASET_ROOT = Path("datasets")
 DEFAULT_OUTPUT_DIR = Path("/tmp/max_finite_shortest_path_analysis")
-DEFAULT_SPLITS = ("train", "val")
-DEFAULT_PROGRESS_INTERVAL = 100
+DEFAULT_PROGRESS_INTERVAL = 50
+OUTPUT_FILE_NAME = "max_finite_shortest_path_statistics.json"
 
 
 @dataclass
-class GraphPathLengthRow:
+class GraphPathLengthResult:
     split: str
-    file: str
+    source_file: str
     node_count: int
-    valid_link_count: int
+    link_count: int
     directed: bool
     max_finite_shortest_path_length: int | None
     status: str
     detail: str = ""
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "dataset_root",
-        nargs="?",
-        type=Path,
-        default=DEFAULT_DATASET_ROOT,
-        help=f"包含 train/val 的原始数据集根目录，默认: {DEFAULT_DATASET_ROOT}",
-    )
-    parser.add_argument(
-        "-o",
-        "--output-dir",
-        type=Path,
-        default=DEFAULT_OUTPUT_DIR,
-        help=f"统计结果输出目录，默认: {DEFAULT_OUTPUT_DIR}",
-    )
-    parser.add_argument(
-        "--splits",
-        nargs="+",
-        default=list(DEFAULT_SPLITS),
-        help="需要分析的数据划分，默认: train val",
-    )
-    parser.add_argument(
-        "--progress-interval",
-        type=int,
-        default=DEFAULT_PROGRESS_INTERVAL,
-        help=f"每处理多少个文件打印一次进度，默认: {DEFAULT_PROGRESS_INTERVAL}",
-    )
-    return parser.parse_args()
-
-
 def iter_json_files(
     dataset_root: Path,
     splits: Iterable[str],
-) -> Iterable[tuple[str, Path]]:
+) -> Iterable[Tuple[str, Path]]:
+    """按 split 递归枚举 JSON 文件。"""
+
     for split in splits:
         split_dir = dataset_root / split
         if not split_dir.exists():
@@ -89,19 +54,25 @@ def iter_json_files(
                 yield split, path
 
 
-def load_graph(path: Path) -> tuple[dict[str, Any] | None, str, str]:
+def list_split_json_files(dataset_root: Path, split: str) -> List[Path]:
+    return [path for _, path in iter_json_files(dataset_root, [split])]
+
+
+def load_graph(path: Path) -> Tuple[Dict[str, Any] | None, str, str]:
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        graph = json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:  # noqa: BLE001 - 坏文件需要记录并继续分析。
         return None, "bad_json", str(exc)
-    if not isinstance(data, dict):
-        return None, "graph_not_object", type(data).__name__
-    return data, "", ""
+    if not isinstance(graph, dict):
+        return None, "graph_not_object", type(graph).__name__
+    return graph, "", ""
 
 
 def build_adjacency(
-    graph: dict[str, Any],
-) -> tuple[dict[str, set[str]], int, bool, str, str]:
+    graph: Dict[str, Any],
+) -> Tuple[Dict[str, set[str]], int, bool, str, str]:
+    """根据 nodes 和 links 构造邻接表，并返回数据质量状态。"""
+
     nodes = graph.get("nodes")
     if not isinstance(nodes, list):
         return (
@@ -112,10 +83,10 @@ def build_adjacency(
             type(nodes).__name__,
         )
 
-    node_ids: list[str] = []
+    node_ids: List[str] = []
+    seen_ids: set[str] = set()
     missing_id_count = 0
     duplicate_id_count = 0
-    seen_ids: set[str] = set()
     for node in nodes:
         if not isinstance(node, dict) or node.get("id") is None:
             missing_id_count += 1
@@ -135,7 +106,7 @@ def build_adjacency(
         return {}, 0, bool(graph.get("directed", False)), "no_valid_nodes", detail
 
     directed = bool(graph.get("directed", False))
-    adjacency: dict[str, set[str]] = {node_id: set() for node_id in node_ids}
+    adjacency: Dict[str, set[str]] = {node_id: set() for node_id in node_ids}
     valid_link_count = 0
     invalid_link_count = 0
     links = graph.get("links", [])
@@ -158,13 +129,12 @@ def build_adjacency(
             invalid_link_count += 1
             continue
 
-        # 邻接表使用集合，因此重复链路不会影响最短路；valid_link_count 仍按输入记录数计。
         adjacency[source_id].add(target_id)
         if not directed:
             adjacency[target_id].add(source_id)
         valid_link_count += 1
 
-    details: list[str] = []
+    details: List[str] = []
     if missing_id_count:
         details.append(f"missing_id_nodes={missing_id_count}")
     if duplicate_id_count:
@@ -174,7 +144,7 @@ def build_adjacency(
     return adjacency, valid_link_count, directed, "ok", "; ".join(details)
 
 
-def maximum_finite_shortest_path_length(adjacency: dict[str, set[str]]) -> int:
+def maximum_finite_shortest_path_length(adjacency: Dict[str, set[str]]) -> int:
     """对每个源节点执行 BFS，返回所有有限最短距离中的最大值。"""
 
     maximum_distance = 0
@@ -188,60 +158,60 @@ def maximum_finite_shortest_path_length(adjacency: dict[str, set[str]]) -> int:
                 if neighbor in distances:
                     continue
                 distances[neighbor] = next_distance
-                if next_distance > maximum_distance:
-                    maximum_distance = next_distance
+                maximum_distance = max(maximum_distance, next_distance)
                 queue.append(neighbor)
     return maximum_distance
 
 
-def analyze_file(dataset_root: Path, split: str, path: Path) -> GraphPathLengthRow:
-    relative_file = str(path.relative_to(dataset_root))
+def analyze_file(
+    dataset_root: Path,
+    split: str,
+    path: Path,
+) -> GraphPathLengthResult:
+    source_file = str(path.relative_to(dataset_root))
     graph, status, detail = load_graph(path)
     if graph is None:
-        return GraphPathLengthRow(
+        return GraphPathLengthResult(
             split=split,
-            file=relative_file,
+            source_file=source_file,
             node_count=0,
-            valid_link_count=0,
+            link_count=0,
             directed=False,
             max_finite_shortest_path_length=None,
             status=status,
             detail=detail,
         )
 
-    adjacency, valid_link_count, directed, status, detail = build_adjacency(graph)
+    adjacency, link_count, directed, status, detail = build_adjacency(graph)
     if status != "ok":
-        return GraphPathLengthRow(
+        return GraphPathLengthResult(
             split=split,
-            file=relative_file,
+            source_file=source_file,
             node_count=len(adjacency),
-            valid_link_count=valid_link_count,
+            link_count=link_count,
             directed=directed,
             max_finite_shortest_path_length=None,
             status=status,
             detail=detail,
         )
 
-    return GraphPathLengthRow(
+    return GraphPathLengthResult(
         split=split,
-        file=relative_file,
+        source_file=source_file,
         node_count=len(adjacency),
-        valid_link_count=valid_link_count,
+        link_count=link_count,
         directed=directed,
-        max_finite_shortest_path_length=maximum_finite_shortest_path_length(adjacency),
+        max_finite_shortest_path_length=maximum_finite_shortest_path_length(
+            adjacency
+        ),
         status="ok",
         detail=detail,
     )
 
 
-def number_summary(values: list[int]) -> dict[str, int | float | None]:
+def number_summary(values: List[int]) -> Dict[str, int | float | None]:
     if not values:
-        return {
-            "count": 0,
-            "min": None,
-            "max": None,
-            "mean": None,
-        }
+        return {"count": 0, "min": None, "max": None, "mean": None}
     return {
         "count": len(values),
         "min": min(values),
@@ -250,132 +220,209 @@ def number_summary(values: list[int]) -> dict[str, int | float | None]:
     }
 
 
-def build_summary(
-    rows: list[GraphPathLengthRow],
-    dataset_root: Path,
-    splits: list[str],
-) -> dict[str, Any]:
-    summary: dict[str, Any] = {
-        "dataset_root": str(dataset_root),
-        "splits": {},
-        "totals": {
-            "files": len(rows),
-            "bad_json": sum(row.status == "bad_json" for row in rows),
-            "graphs": sum(row.status == "ok" for row in rows),
-        },
-        "missing_split_dirs": [
-            split for split in splits if not (dataset_root / split).is_dir()
-        ],
-        "max_finite_shortest_path_length": number_summary(
-            [
-                row.max_finite_shortest_path_length
-                for row in rows
-                if row.status == "ok"
-                and row.max_finite_shortest_path_length is not None
-            ]
-        ),
-    }
-    for split in splits:
-        split_rows = [row for row in rows if row.split == split]
-        split_values = [
-            row.max_finite_shortest_path_length
-            for row in split_rows
-            if row.status == "ok" and row.max_finite_shortest_path_length is not None
-        ]
-        summary["splits"][split] = {
-            "files": len(split_rows),
-            "bad_json": sum(row.status == "bad_json" for row in split_rows),
-            "graphs": sum(row.status == "ok" for row in split_rows),
-            "max_finite_shortest_path_length": number_summary(split_values),
+def value_distribution(values: List[int]) -> Dict[str, Dict[str, int | float]]:
+    counts = Counter(values)
+    total = len(values)
+    return {
+        str(length): {
+            "count": count,
+            "percentage": round(count / total * 100, 2) if total else 0.0,
         }
-    return summary
+        for length, count in sorted(counts.items())
+    }
+
+
+def build_scope_statistics(results: List[GraphPathLengthResult]) -> Dict[str, Any]:
+    valid_results = [result for result in results if result.status == "ok"]
+    values = [
+        result.max_finite_shortest_path_length
+        for result in valid_results
+        if result.max_finite_shortest_path_length is not None
+    ]
+    return {
+        "input_files": len(results),
+        "analyzed_graphs": len(valid_results),
+        "skipped_files": len(results) - len(valid_results),
+        "length_summary": number_summary(values),
+        "length_distribution": value_distribution(values),
+    }
 
 
 def write_json(path: Path, data: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True),
+        json.dumps(data, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
 
 
-def write_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> None:
-    with path.open("w", encoding="utf-8") as file:
-        for row in rows:
-            file.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+def terminal_bar(count: int, total: int) -> str:
+    percentage = count / total * 100 if total else 0.0
+    bar_length = max(1, int(percentage / 2)) if count else 0
+    return "█" * bar_length
 
 
-def write_csv(
-    path: Path,
-    fieldnames: list[str],
-    rows: Iterable[dict[str, Any]],
+def print_terminal_summary(results: List[GraphPathLengthResult]) -> None:
+    valid_results = [result for result in results if result.status == "ok"]
+    values = [
+        result.max_finite_shortest_path_length
+        for result in valid_results
+        if result.max_finite_shortest_path_length is not None
+    ]
+    summary = number_summary(values)
+    counts = Counter(values)
+
+    print(f"\n{'=' * 60}")
+    print(f"统计完成：{len(valid_results)} 张图")
+    print(f"{'=' * 60}")
+    print("\n--- 最大有限最短路长度汇总 ---")
+    print(f"  count: {summary['count']}")
+    print(f"  min:   {summary['min']}")
+    print(f"  max:   {summary['max']}")
+    print(f"  mean:  {summary['mean']}")
+
+    print("\n--- 最大有限最短路长度分布 ---")
+    for length, count in sorted(counts.items()):
+        percentage = count / len(values) * 100 if values else 0.0
+        print(
+            f"  {length:>5}  {terminal_bar(count, len(values))}  "
+            f"{count} ({percentage:.2f}%)"
+        )
+
+    skipped_files = len(results) - len(valid_results)
+    if skipped_files:
+        print(f"\n跳过 {skipped_files} 个无法分析的文件")
+    print(f"\n{'=' * 60}")
+
+
+def build_statistics(
+    dataset_root: Path,
+    output_dir: Path,
+    splits: List[str],
+    progress_interval: int,
 ) -> None:
-    with path.open("w", newline="", encoding="utf-8") as file:
-        writer = csv.DictWriter(file, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(rows)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    results: List[GraphPathLengthResult] = []
+
+    for split in splits:
+        split_files = list_split_json_files(dataset_root, split)
+        split_total = len(split_files)
+        started_at = time.time()
+
+        if progress_interval > 0:
+            print(f"[{split}] start: {split_total} files", flush=True)
+
+        for file_index, path in enumerate(split_files, start=1):
+            results.append(analyze_file(dataset_root, split, path))
+
+            if progress_interval > 0 and (
+                file_index % progress_interval == 0 or file_index == split_total
+            ):
+                elapsed = max(0.001, time.time() - started_at)
+                speed = file_index / elapsed
+                remaining = max(0, split_total - file_index)
+                eta = remaining / speed if speed > 0 else 0.0
+                percentage = (
+                    file_index / split_total * 100 if split_total else 100.0
+                )
+                print(
+                    f"[{split}] {file_index}/{split_total} files "
+                    f"({percentage:.2f}%), elapsed {elapsed:.1f}s, "
+                    f"{speed:.2f} files/s, eta {eta:.1f}s",
+                    flush=True,
+                )
+
+    issues = [
+        {
+            "split": result.split,
+            "file": result.source_file,
+            "status": result.status,
+            "detail": result.detail,
+        }
+        for result in results
+        if result.status != "ok" or result.detail
+    ]
+    per_file = [
+        {
+            "split": result.split,
+            "source_file": result.source_file,
+            "node_count": result.node_count,
+            "link_count": result.link_count,
+            "directed": result.directed,
+            "max_finite_shortest_path_length": (
+                result.max_finite_shortest_path_length
+            ),
+        }
+        for result in results
+        if result.status == "ok"
+    ]
+    summary = {
+        "dataset_root": str(dataset_root),
+        "splits": splits,
+        "overall": build_scope_statistics(results),
+        "by_split": {
+            split: build_scope_statistics(
+                [result for result in results if result.split == split]
+            )
+            for split in splits
+        },
+        "issues": issues,
+    }
+
+    output_path = output_dir / OUTPUT_FILE_NAME
+    write_json(
+        output_path,
+        {
+            "summary": summary,
+            "per_file": per_file,
+        },
+    )
+    print_terminal_summary(results)
+    print(f"统计结果已写入 {output_path}")
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="统计每张拓扑图的最大有限最短路长度。"
+    )
+    parser.add_argument(
+        "dataset_root",
+        nargs="?",
+        type=Path,
+        default=DEFAULT_DATASET_ROOT,
+        help=f"数据集根目录，内含 train/ 和 val/。默认：{DEFAULT_DATASET_ROOT}",
+    )
+    parser.add_argument(
+        "-o",
+        "--output-dir",
+        type=Path,
+        default=DEFAULT_OUTPUT_DIR,
+        help=f"统计结果输出目录。默认：{DEFAULT_OUTPUT_DIR}",
+    )
+    parser.add_argument(
+        "--split",
+        choices=["train", "val", "all"],
+        default="all",
+        help="统计范围：train、val 或 all。默认：all",
+    )
+    parser.add_argument(
+        "--progress-interval",
+        type=int,
+        default=DEFAULT_PROGRESS_INTERVAL,
+        help="每 N 张图打印一次进度。0 表示不打印。默认：%(default)s",
+    )
+    return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-
-    files = list(iter_json_files(args.dataset_root, args.splits))
-    rows: list[GraphPathLengthRow] = []
-    print(f"found {len(files)} json files")
-    for index, (split, path) in enumerate(files, start=1):
-        rows.append(analyze_file(args.dataset_root, split, path))
-        if args.progress_interval > 0 and index % args.progress_interval == 0:
-            status_counts = Counter(row.status for row in rows)
-            print(
-                f"processed {index}/{len(files)}, "
-                f"ok={status_counts.get('ok', 0)}, "
-                f"errors={index - status_counts.get('ok', 0)}"
-            )
-
-    summary = build_summary(
-        rows,
+    splits = ["train", "val"] if args.split == "all" else [args.split]
+    build_statistics(
         args.dataset_root,
-        args.splits,
+        args.output_dir,
+        splits,
+        args.progress_interval,
     )
-    graph_rows = [
-        {
-            "split": row.split,
-            "file": row.file,
-            "directed": row.directed,
-            "nodes": row.node_count,
-            "links": row.valid_link_count,
-            "max_finite_shortest_path_length": row.max_finite_shortest_path_length,
-        }
-        for row in rows
-        if row.status == "ok"
-    ]
-    issues = [
-        {
-            "severity": "error" if row.status != "ok" else "warning",
-            "split": row.split,
-            "file": row.file,
-            "issue": row.status if row.status != "ok" else "graph_data_warning",
-            "detail": row.detail,
-        }
-        for row in rows
-        if row.status != "ok" or row.detail
-    ]
-
-    write_json(args.output_dir / "dataset_summary.json", summary)
-    write_jsonl(args.output_dir / "data_quality_issues.jsonl", issues)
-    write_csv(
-        args.output_dir / "graph_stats.csv",
-        [
-            "split",
-            "file",
-            "directed",
-            "nodes",
-            "links",
-            "max_finite_shortest_path_length",
-        ],
-        graph_rows,
-    )
-    print(f"Wrote analysis reports to {args.output_dir}")
 
 
 if __name__ == "__main__":
