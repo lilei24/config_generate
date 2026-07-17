@@ -11,7 +11,8 @@ datasets/
   train/*.json
   val/*.json
 
-脚本输出逐文件 CSV、长度分布 CSV 和汇总 JSON，不保存具体路径。
+脚本参考 analyze_dataset.py 的输出形式，生成 dataset_summary.json、
+graph_stats.csv 和 data_quality_issues.jsonl，不保存具体路径。
 """
 
 from __future__ import annotations
@@ -20,9 +21,9 @@ import argparse
 import csv
 import json
 from collections import Counter, deque
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
-from statistics import mean, median
+from statistics import mean
 from typing import Any, Iterable
 
 
@@ -103,7 +104,13 @@ def build_adjacency(
 ) -> tuple[dict[str, set[str]], int, bool, str, str]:
     nodes = graph.get("nodes")
     if not isinstance(nodes, list):
-        return {}, 0, bool(graph.get("directed", False)), "nodes_not_list", type(nodes).__name__
+        return (
+            {},
+            0,
+            bool(graph.get("directed", False)),
+            "nodes_not_list",
+            type(nodes).__name__,
+        )
 
     node_ids: list[str] = []
     missing_id_count = 0
@@ -234,47 +241,39 @@ def number_summary(values: list[int]) -> dict[str, int | float | None]:
             "min": None,
             "max": None,
             "mean": None,
-            "median": None,
         }
     return {
         "count": len(values),
         "min": min(values),
         "max": max(values),
         "mean": round(mean(values), 4),
-        "median": median(values),
     }
 
 
 def build_summary(
     rows: list[GraphPathLengthRow],
     dataset_root: Path,
-    output_dir: Path,
     splits: list[str],
 ) -> dict[str, Any]:
-    valid_rows = [row for row in rows if row.status == "ok"]
     summary: dict[str, Any] = {
-        "definition": "maximum finite shortest-path length in link hops",
         "dataset_root": str(dataset_root),
-        "output_dir": str(output_dir),
-        "requested_splits": splits,
+        "splits": {},
+        "totals": {
+            "files": len(rows),
+            "bad_json": sum(row.status == "bad_json" for row in rows),
+            "graphs": sum(row.status == "ok" for row in rows),
+        },
         "missing_split_dirs": [
             split for split in splits if not (dataset_root / split).is_dir()
         ],
-        "files": len(rows),
-        "status_counts": dict(sorted(Counter(row.status for row in rows).items())),
         "max_finite_shortest_path_length": number_summary(
             [
                 row.max_finite_shortest_path_length
-                for row in valid_rows
-                if row.max_finite_shortest_path_length is not None
+                for row in rows
+                if row.status == "ok"
+                and row.max_finite_shortest_path_length is not None
             ]
         ),
-        "splits": {},
-        "outputs": {
-            "per_graph_csv": "graph_max_finite_shortest_path.csv",
-            "distribution_csv": "max_finite_shortest_path_distribution.csv",
-            "summary_json": "max_finite_shortest_path_summary.json",
-        },
     }
     for split in splits:
         split_rows = [row for row in rows if row.split == split]
@@ -285,51 +284,35 @@ def build_summary(
         ]
         summary["splits"][split] = {
             "files": len(split_rows),
-            "status_counts": dict(
-                sorted(Counter(row.status for row in split_rows).items())
-            ),
+            "bad_json": sum(row.status == "bad_json" for row in split_rows),
+            "graphs": sum(row.status == "ok" for row in split_rows),
             "max_finite_shortest_path_length": number_summary(split_values),
         }
     return summary
 
 
-def write_per_graph_csv(path: Path, rows: list[GraphPathLengthRow]) -> None:
-    fieldnames = [field.name for field in GraphPathLengthRow.__dataclass_fields__.values()]
-    with path.open("w", encoding="utf-8", newline="") as file:
-        writer = csv.DictWriter(file, fieldnames=fieldnames)
-        writer.writeheader()
+def write_json(path: Path, data: Any) -> None:
+    path.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+
+
+def write_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> None:
+    with path.open("w", encoding="utf-8") as file:
         for row in rows:
-            writer.writerow(asdict(row))
+            file.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
 
 
-def write_distribution_csv(path: Path, rows: list[GraphPathLengthRow]) -> None:
-    fieldnames = ["scope", "max_finite_shortest_path_length", "graph_count", "ratio"]
-    scopes = ["all", *sorted({row.split for row in rows})]
-    with path.open("w", encoding="utf-8", newline="") as file:
+def write_csv(
+    path: Path,
+    fieldnames: list[str],
+    rows: Iterable[dict[str, Any]],
+) -> None:
+    with path.open("w", newline="", encoding="utf-8") as file:
         writer = csv.DictWriter(file, fieldnames=fieldnames)
         writer.writeheader()
-        for scope in scopes:
-            scope_rows = [
-                row
-                for row in rows
-                if row.status == "ok" and (scope == "all" or row.split == scope)
-            ]
-            counts = Counter(
-                row.max_finite_shortest_path_length
-                for row in scope_rows
-                if row.max_finite_shortest_path_length is not None
-            )
-            total = sum(counts.values())
-            for length in sorted(counts):
-                count = counts[length]
-                writer.writerow(
-                    {
-                        "scope": scope,
-                        "max_finite_shortest_path_length": length,
-                        "graph_count": count,
-                        "ratio": round(count / total, 8) if total else 0.0,
-                    }
-                )
+        writer.writerows(rows)
 
 
 def main() -> None:
@@ -349,25 +332,50 @@ def main() -> None:
                 f"errors={index - status_counts.get('ok', 0)}"
             )
 
-    write_per_graph_csv(
-        args.output_dir / "graph_max_finite_shortest_path.csv",
-        rows,
-    )
-    write_distribution_csv(
-        args.output_dir / "max_finite_shortest_path_distribution.csv",
-        rows,
-    )
     summary = build_summary(
         rows,
         args.dataset_root,
-        args.output_dir,
         args.splits,
     )
-    (args.output_dir / "max_finite_shortest_path_summary.json").write_text(
-        json.dumps(summary, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
+    graph_rows = [
+        {
+            "split": row.split,
+            "file": row.file,
+            "directed": row.directed,
+            "nodes": row.node_count,
+            "links": row.valid_link_count,
+            "max_finite_shortest_path_length": row.max_finite_shortest_path_length,
+        }
+        for row in rows
+        if row.status == "ok"
+    ]
+    issues = [
+        {
+            "severity": "error" if row.status != "ok" else "warning",
+            "split": row.split,
+            "file": row.file,
+            "issue": row.status if row.status != "ok" else "graph_data_warning",
+            "detail": row.detail,
+        }
+        for row in rows
+        if row.status != "ok" or row.detail
+    ]
+
+    write_json(args.output_dir / "dataset_summary.json", summary)
+    write_jsonl(args.output_dir / "data_quality_issues.jsonl", issues)
+    write_csv(
+        args.output_dir / "graph_stats.csv",
+        [
+            "split",
+            "file",
+            "directed",
+            "nodes",
+            "links",
+            "max_finite_shortest_path_length",
+        ],
+        graph_rows,
     )
-    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    print(f"Wrote analysis reports to {args.output_dir}")
 
 
 if __name__ == "__main__":
