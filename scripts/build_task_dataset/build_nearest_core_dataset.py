@@ -14,7 +14,8 @@ without_answer 删除标准答案。每个输出 JSON 完整保留原始拓扑�
 
 1. CORE、Gateway+CORE；
 2. Gateway_vRR、Gateway、Firewall；
-3. AGG。
+3. AGG；
+4. ACC。
 
 只有当前层级不存在任何可达 AP→目标组合时才回退到下一层级。选择目标层级后，
 随机选择第一个能够到达该层级目标的 AP；如果多个目标距离相同，则保留到这些
@@ -44,6 +45,7 @@ TARGET_ROLE_TIERS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("core", ("CORE", "Gateway+CORE")),
     ("gateway_or_firewall", ("Gateway_vRR", "Gateway", "Firewall")),
     ("aggregation", ("AGG",)),
+    ("access", ("ACC",)),
 )
 
 
