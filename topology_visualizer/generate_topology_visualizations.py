@@ -20,6 +20,7 @@ DEFAULT_OUTPUT_ROOT = Path("/tmp/topology_visualizations")
 DEFAULT_PROGRESS_INTERVAL = 20
 MISSING_NAME = "<missing>"
 MISSING_ROLE = "<missing>"
+MISSING_TYPE = "<missing>"
 
 ROLE_COLORS = {
     "CORE": "#c62828",
@@ -52,6 +53,7 @@ class GraphData:
     nodes: list[dict[str, Any]]
     edges: list[dict[str, Any]]
     role_counts: Counter[str]
+    type_counts: Counter[str]
     isolated_count: int
     degree_one_count: int
     component_count: int
@@ -67,14 +69,26 @@ def scalar_text(value: Any, fallback: str) -> str:
     return text if text else fallback
 
 
-def get_device_name(node: dict[str, Any]) -> str:
+def get_device(node: dict[str, Any]) -> dict[str, Any] | None:
     # 原始格式使用 devices；同时兼容可能出现的历史字段 device。
     device = node.get("devices")
     if not isinstance(device, dict):
         device = node.get("device")
-    if not isinstance(device, dict):
+    return device if isinstance(device, dict) else None
+
+
+def get_device_name(node: dict[str, Any]) -> str:
+    device = get_device(node)
+    if device is None:
         return MISSING_NAME
     return scalar_text(device.get("NAME"), MISSING_NAME)
+
+
+def get_device_type(node: dict[str, Any]) -> str:
+    device = get_device(node)
+    if device is None:
+        return MISSING_TYPE
+    return scalar_text(device.get("TYPE"), MISSING_TYPE)
 
 
 def get_device_role(node: dict[str, Any]) -> str:
@@ -232,13 +246,17 @@ def parse_graph(dataset_root: Path, split: str, path: Path) -> GraphData:
 
     nodes: list[dict[str, Any]] = []
     role_counts: Counter[str] = Counter()
+    type_counts: Counter[str] = Counter()
     for node_id, raw_node in node_map.items():
         role = get_device_role(raw_node)
+        device_type = get_device_type(raw_node)
         role_counts[role] += 1
+        type_counts[device_type] += 1
         nodes.append(
             {
                 "id": node_id,
                 "name": get_device_name(raw_node),
+                "type": device_type,
                 "role": role,
                 "color": role_color(role),
                 "degree": len(adjacency[node_id]),
@@ -262,6 +280,7 @@ def parse_graph(dataset_root: Path, split: str, path: Path) -> GraphData:
         nodes=nodes,
         edges=edges,
         role_counts=role_counts,
+        type_counts=type_counts,
         isolated_count=sum(node["degree"] == 0 for node in nodes),
         degree_one_count=sum(node["degree"] == 1 for node in nodes),
         component_count=len(components),
@@ -290,6 +309,12 @@ def graph_page(graph: GraphData) -> str:
         {"role": role, "count": count, "color": role_color(role)}
         for role, count in sorted(
             graph.role_counts.items(), key=lambda item: (-item[1], item[0])
+        )
+    ]
+    type_payload = [
+        {"type": device_type, "count": count}
+        for device_type, count in sorted(
+            graph.type_counts.items(), key=lambda item: (-item[1], item[0])
         )
     ]
     return f"""<!doctype html>
@@ -361,6 +386,10 @@ canvas.dragging {{ cursor: grabbing; }}
       <div id="roles"></div>
     </section>
     <section class="section">
+      <h2>DEVICE.TYPE</h2>
+      <div id="types"></div>
+    </section>
+    <section class="section">
       <h2>选中节点</h2>
       <div id="details" class="details">未选择</div>
     </section>
@@ -376,11 +405,13 @@ canvas.dragging {{ cursor: grabbing; }}
 "use strict";
 const graph = {json_for_script(graph_payload)};
 const roles = {json_for_script(role_payload)};
+const deviceTypes = {json_for_script(type_payload)};
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 const main = canvas.parentElement;
 const state = {{ scale: 1, offsetX: 0, offsetY: 0, selected: null, running: true, draggingNode: null, panning: false, lastX: 0, lastY: 0 }};
 const enabledRoles = new Set(roles.map(item => item.role));
+const enabledTypes = new Set(deviceTypes.map(item => item.type));
 const nodeById = new Map();
 const neighbors = new Map();
 graph.nodes.forEach((node, index) => {{
@@ -391,7 +422,7 @@ graph.nodes.forEach((node, index) => {{
 }});
 graph.edges.forEach(edge => {{ neighbors.get(edge.source)?.add(edge.target); neighbors.get(edge.target)?.add(edge.source); }});
 
-function visibleNodes() {{ return graph.nodes.filter(node => enabledRoles.has(node.role)); }}
+function visibleNodes() {{ return graph.nodes.filter(node => enabledRoles.has(node.role) && enabledTypes.has(node.type)); }}
 function worldPoint(clientX, clientY) {{
   const rect = canvas.getBoundingClientRect();
   return {{ x: (clientX - rect.left - state.offsetX) / state.scale, y: (clientY - rect.top - state.offsetY) / state.scale }};
@@ -480,7 +511,7 @@ function findNodeAt(clientX, clientY) {{
 function selectNode(node) {{
   state.selected = node ? node.id : null;
   const details = document.getElementById("details");
-  details.innerHTML = node ? `<b>ID</b> ${{escapeHtml(node.id)}}<br><b>NAME</b> ${{escapeHtml(node.name)}}<br><b>DEVICEROLE</b> ${{escapeHtml(node.role)}}<br><b>邻居数</b> ${{node.degree}}` : "未选择";
+  details.innerHTML = node ? `<b>ID</b> ${{escapeHtml(node.id)}}<br><b>NAME</b> ${{escapeHtml(node.name)}}<br><b>TYPE</b> ${{escapeHtml(node.type)}}<br><b>DEVICEROLE</b> ${{escapeHtml(node.role)}}<br><b>邻居数</b> ${{node.degree}}` : "未选择";
   draw();
 }}
 function escapeHtml(value) {{ const div = document.createElement("div"); div.textContent = value; return div.innerHTML; }}
@@ -506,12 +537,19 @@ const roleContainer = document.getElementById("roles");
 roles.forEach(item => {{
   const row = document.createElement("label"); row.className = "role";
   row.innerHTML = `<input type="checkbox" checked><span class="swatch" style="background:${{item.color}}"></span><span class="role-name" title="${{escapeHtml(item.role)}}">${{escapeHtml(item.role)}}</span><span class="role-count">${{item.count}}</span>`;
-  row.querySelector("input").addEventListener("change", event => {{ event.target.checked ? enabledRoles.add(item.role) : enabledRoles.delete(item.role); if (state.selected && !enabledRoles.has(nodeById.get(state.selected).role)) selectNode(null); fit(); }});
+  row.querySelector("input").addEventListener("change", event => {{ event.target.checked ? enabledRoles.add(item.role) : enabledRoles.delete(item.role); if (state.selected && !visibleNodes().some(node => node.id === state.selected)) selectNode(null); fit(); }});
   roleContainer.appendChild(row);
+}});
+const typeContainer = document.getElementById("types");
+deviceTypes.forEach(item => {{
+  const row = document.createElement("label"); row.className = "role";
+  row.innerHTML = `<input type="checkbox" checked><span></span><span class="role-name" title="${{escapeHtml(item.type)}}">${{escapeHtml(item.type)}}</span><span class="role-count">${{item.count}}</span>`;
+  row.querySelector("input").addEventListener("change", event => {{ event.target.checked ? enabledTypes.add(item.type) : enabledTypes.delete(item.type); if (state.selected && !visibleNodes().some(node => node.id === state.selected)) selectNode(null); fit(); }});
+  typeContainer.appendChild(row);
 }});
 function runSearch() {{
   const query = document.getElementById("search").value.trim().toLowerCase(); if (!query) return;
-  const node = graph.nodes.find(item => enabledRoles.has(item.role) && (item.id.toLowerCase().includes(query) || item.name.toLowerCase().includes(query)));
+  const node = graph.nodes.find(item => enabledRoles.has(item.role) && enabledTypes.has(item.type) && (item.id.toLowerCase().includes(query) || item.name.toLowerCase().includes(query)));
   if (!node) return; selectNode(node); state.scale = Math.max(state.scale, 1.5); state.offsetX = main.clientWidth / 2 - node.x * state.scale; state.offsetY = main.clientHeight / 2 - node.y * state.scale;
 }}
 document.getElementById("searchButton").addEventListener("click", runSearch);
@@ -532,6 +570,10 @@ def index_page(records: list[dict[str, Any]], title: str, root_prefix: str = "")
         role_text = ", ".join(
             f"{role}: {count}" for role, count in record["roles"].items()
         )
+        type_text = ", ".join(
+            f"{device_type}: {count}"
+            for device_type, count in record["types"].items()
+        )
         rows.append(
             "<tr>"
             f"<td><a href=\"{html.escape(root_prefix + record['html_file'])}\">"
@@ -539,7 +581,7 @@ def index_page(records: list[dict[str, Any]], title: str, root_prefix: str = "")
             f"<td>{record['node_count']}</td><td>{record['edge_count']}</td>"
             f"<td>{record['component_count']}</td><td>{record['degree_one_count']}</td>"
             f"<td>{record['isolated_count']}</td><td>{'是' if record['has_core'] else '否'}</td>"
-            f"<td>{html.escape(role_text)}</td></tr>"
+            f"<td>{html.escape(role_text)}</td><td>{html.escape(type_text)}</td></tr>"
         )
     return f"""<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -552,7 +594,7 @@ th, td {{ padding: 9px 10px; text-align: left; border-bottom: 1px solid #e5e7eb;
 tr:hover td {{ background: #f1f5f9; }} a {{ color: #075bb5; text-decoration: none; }} a:hover {{ text-decoration: underline; }}
 .count {{ margin-top: 6px; color: #697586; font-size: 13px; }}
 </style></head><body><header><h1>{html.escape(title)}</h1><div class="count">共 {len(records)} 张图</div></header>
-<main><table><thead><tr><th>文件</th><th>节点</th><th>链路</th><th>分量</th><th>度1</th><th>孤立</th><th>CORE</th><th>DEVICEROLE</th></tr></thead>
+<main><table><thead><tr><th>文件</th><th>节点</th><th>链路</th><th>分量</th><th>度1</th><th>孤立</th><th>CORE</th><th>DEVICEROLE</th><th>DEVICE.TYPE</th></tr></thead>
 <tbody>{''.join(rows)}</tbody></table></main></body></html>"""
 
 
@@ -605,6 +647,12 @@ def build_visualizations(args: argparse.Namespace) -> None:
                     "roles": dict(
                         sorted(
                             graph.role_counts.items(),
+                            key=lambda item: (-item[1], item[0]),
+                        )
+                    ),
+                    "types": dict(
+                        sorted(
+                            graph.type_counts.items(),
                             key=lambda item: (-item[1], item[0]),
                         )
                     ),
