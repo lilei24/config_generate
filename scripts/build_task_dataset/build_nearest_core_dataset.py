@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""构造“查找距离接入节点最近的核心交换机”任务数据集。
+"""构造“从 AP 查找最近上层目标设备”任务数据集。
 
 输入数据集目录结构默认是：
 
@@ -9,13 +9,16 @@ datasets/
 
 一次运行会生成两套内容一一对应的数据集：with_answer 保留标准答案，
 without_answer 删除标准答案。每个输出 JSON 完整保留原始拓扑，并在顶层增加
-任务源节点、自然语言问题和任务元数据。源节点严格选择 DEVICEROLE=AP 的节点，
-目标核心设备严格选择 DEVICEROLE=CORE 的节点；Gateway+CORE 等复合角色不计入
-目标集合。
+任务源节点、自然语言问题和任务元数据。源节点严格选择 DEVICEROLE=AP 的节点。
+目标角色按以下优先级回退：
 
-如果多个核心设备与源节点的距离相同且均为最近核心，则全部保留，并输出到
-每个最近核心的全部最短节点路径。没有 AP、没有 CORE 或二者均不连通的图会被
-跳过，原因写入 build_issues.jsonl。
+1. CORE、Gateway+CORE；
+2. Gateway_vRR、Gateway、Firewall；
+3. AGG。
+
+只有当前层级不存在任何可达 AP→目标组合时才回退到下一层级。选择目标层级后，
+随机选择第一个能够到达该层级目标的 AP；如果多个目标距离相同，则保留到这些
+目标的全部最短节点 ID 路径。答案只包含最短跳数和全部最短路径。
 """
 
 from __future__ import annotations
@@ -37,6 +40,11 @@ DEFAULT_SPLITS = ("train", "val")
 DEFAULT_PROGRESS_INTERVAL = 100
 WITH_ANSWER_DIR_NAME = "with_answer"
 WITHOUT_ANSWER_DIR_NAME = "without_answer"
+TARGET_ROLE_TIERS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("core", ("CORE", "Gateway+CORE")),
+    ("gateway_or_firewall", ("Gateway_vRR", "Gateway", "Firewall")),
+    ("aggregation", ("AGG",)),
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -97,13 +105,6 @@ def load_json(path: Path) -> tuple[dict[str, Any] | None, str]:
     return data, ""
 
 
-def get_device(node: dict[str, Any]) -> dict[str, Any]:
-    device = node.get("device")
-    if device is None:
-        device = node.get("devices", {})
-    return device if isinstance(device, dict) else {}
-
-
 def get_node_role(node: dict[str, Any]) -> str:
     topology_node = node.get("topologyNode")
     if not isinstance(topology_node, dict):
@@ -114,14 +115,14 @@ def get_node_role(node: dict[str, Any]) -> str:
 
 def get_node_information(
     graph: dict[str, Any],
-) -> tuple[list[str], dict[str, str], dict[str, str]]:
+) -> tuple[list[str], dict[str, str]]:
     nodes = graph.get("nodes")
     if not isinstance(nodes, list):
-        return [], {}, {}
+        return [], {}
 
     node_ids: list[str] = []
-    node_name_by_id: dict[str, str] = {}
     node_role_by_id: dict[str, str] = {}
+    seen_node_ids: set[str] = set()
     for node in nodes:
         if not isinstance(node, dict):
             continue
@@ -130,15 +131,13 @@ def get_node_information(
             continue
 
         node_id_str = str(node_id)
-        device = get_device(node)
-        node_name = device.get("NAME")
+        if node_id_str in seen_node_ids:
+            continue
+        seen_node_ids.add(node_id_str)
         node_ids.append(node_id_str)
-        node_name_by_id[node_id_str] = (
-            str(node_name) if node_name is not None else node_id_str
-        )
         node_role_by_id[node_id_str] = get_node_role(node)
 
-    return node_ids, node_name_by_id, node_role_by_id
+    return node_ids, node_role_by_id
 
 
 def build_adjacency(
@@ -217,73 +216,87 @@ def restore_all_shortest_paths(
     return sorted(paths)
 
 
-def find_nearest_cores(
+def find_nearest_targets(
     adjacency: dict[str, set[str]],
     source: str,
-    core_node_ids: list[str],
+    target_node_ids: list[str],
 ) -> tuple[list[str], list[list[str]], int | None]:
     distances, parents = shortest_path_tree(adjacency, source)
-    reachable_cores = [node_id for node_id in core_node_ids if node_id in distances]
-    if not reachable_cores:
+    reachable_targets = [
+        node_id for node_id in target_node_ids if node_id in distances
+    ]
+    if not reachable_targets:
         return [], [], None
 
-    minimum_distance = min(distances[node_id] for node_id in reachable_cores)
-    nearest_cores = sorted(
+    minimum_distance = min(distances[node_id] for node_id in reachable_targets)
+    nearest_targets = sorted(
         node_id
-        for node_id in reachable_cores
+        for node_id in reachable_targets
         if distances[node_id] == minimum_distance
     )
     paths: list[list[str]] = []
-    for core_node_id in nearest_cores:
-        paths.extend(restore_all_shortest_paths(source, core_node_id, parents))
-    return nearest_cores, sorted(paths), minimum_distance
+    for target_node_id in nearest_targets:
+        paths.extend(restore_all_shortest_paths(source, target_node_id, parents))
+    return nearest_targets, sorted(paths), minimum_distance
 
 
-def choose_source_and_nearest_cores(
+def choose_source_and_nearest_targets(
     ap_node_ids: list[str],
-    core_node_ids: list[str],
+    node_role_by_id: dict[str, str],
     adjacency: dict[str, set[str]],
     rng: random.Random,
-) -> tuple[str | None, list[str], list[list[str]], int | None]:
-    """随机检查 AP 候选，选择第一个能够到达至少一个 CORE 的节点。"""
+) -> tuple[
+    str | None,
+    list[str],
+    list[list[str]],
+    int | None,
+    str | None,
+    tuple[str, ...],
+]:
+    """优先选择最高目标层级，再随机选择一个可达该层级的 AP。"""
 
     candidates = list(ap_node_ids)
     rng.shuffle(candidates)
-    for source in candidates:
-        nearest_cores, paths, path_length = find_nearest_cores(
-            adjacency,
-            source,
-            core_node_ids,
-        )
-        if nearest_cores and paths:
-            return source, nearest_cores, paths, path_length
-    return None, [], [], None
+    for tier_name, target_roles in TARGET_ROLE_TIERS:
+        target_node_ids = [
+            node_id
+            for node_id, role in node_role_by_id.items()
+            if role in target_roles
+        ]
+        if not target_node_ids:
+            continue
+        for source in candidates:
+            nearest_targets, paths, path_length = find_nearest_targets(
+                adjacency,
+                source,
+                target_node_ids,
+            )
+            if nearest_targets and paths:
+                return (
+                    source,
+                    nearest_targets,
+                    paths,
+                    path_length,
+                    tier_name,
+                    target_roles,
+                )
+    return None, [], [], None, None, ()
 
 
 def build_answer(
-    nearest_core_ids: list[str],
     node_paths: list[list[str]],
     path_length: int,
-    node_name_by_id: dict[str, str],
-    node_role_by_id: dict[str, str],
 ) -> dict[str, Any]:
-    named_paths = [
-        [node_name_by_id.get(node_id, node_id) for node_id in path]
-        for path in node_paths
-    ]
-    role_paths = [
-        [node_role_by_id.get(node_id, "") for node_id in path]
-        for path in node_paths
-    ]
     return {
-        "connected": True,
         "path_length": path_length,
-        "nearest_core_node_names": sorted(
-            node_name_by_id.get(node_id, node_id) for node_id in nearest_core_ids
-        ),
-        "paths": named_paths,
-        "path_role_sequences": role_paths,
+        "paths": sorted(node_paths),
     }
+
+
+def format_role_list(target_roles: tuple[str, ...]) -> str:
+    if len(target_roles) == 1:
+        return target_roles[0]
+    return "、".join(target_roles[:-1]) + " 或 " + target_roles[-1]
 
 
 def write_json(path: Path, data: dict[str, Any], indent: int) -> None:
@@ -313,53 +326,60 @@ def process_file(
     if graph is None:
         return False, f"load-json-error: {error}", None
 
-    node_ids, node_name_by_id, node_role_by_id = get_node_information(graph)
+    node_ids, node_role_by_id = get_node_information(graph)
     if not node_ids:
         return False, "no-valid-nodes", None
 
-    # 角色使用严格相等判断，避免把 Gateway+CORE 当作 CORE。
+    # 所有角色使用严格相等判断，复合角色只进入显式配置的目标层级。
     ap_node_ids = [
         node_id for node_id in node_ids if node_role_by_id.get(node_id) == "AP"
     ]
-    core_node_ids = [
-        node_id for node_id in node_ids if node_role_by_id.get(node_id) == "CORE"
-    ]
     if not ap_node_ids:
         return False, "no-ap-role-node", None
-    if not core_node_ids:
-        return False, "no-core-role-node", None
+    supported_target_roles = {
+        role for _, roles in TARGET_ROLE_TIERS for role in roles
+    }
+    if not any(role in supported_target_roles for role in node_role_by_id.values()):
+        return False, "no-supported-target-role-node", None
 
     adjacency = build_adjacency(graph, set(node_ids))
     if not any(adjacency.values()):
         return False, "no-valid-links", None
 
-    source, nearest_core_ids, node_paths, path_length = choose_source_and_nearest_cores(
+    (
+        source,
+        nearest_target_ids,
+        node_paths,
+        path_length,
+        target_tier,
+        target_roles,
+    ) = choose_source_and_nearest_targets(
         ap_node_ids,
-        core_node_ids,
+        node_role_by_id,
         adjacency,
         rng,
     )
-    if source is None or path_length is None:
-        return False, "no-ap-can-reach-core", None
+    if source is None or path_length is None or target_tier is None:
+        return False, "no-ap-can-reach-supported-target", None
 
-    source_name = node_name_by_id.get(source, source)
     task_graph = copy.deepcopy(graph)
-    task_graph["task_source_node_name"] = source_name
+    task_graph["task_source_node_id"] = source
     task_graph["task_question"] = (
-        f"距离 {source_name} 最近的核心交换机是什么？"
-        "请输出最短距离、全部最近核心设备及对应的全部最短物理路径。"
+        f"请查找从 AP 节点 ID {source} 到 DEVICEROLE 为 "
+        f"{format_role_list(target_roles)} 的最近设备的全部最短物理路径。"
+        "请输出最短跳数和全部最短路径，路径中的节点使用节点 ID。"
     )
     task_graph["task_answer"] = build_answer(
-        nearest_core_ids=nearest_core_ids,
         node_paths=node_paths,
         path_length=path_length,
-        node_name_by_id=node_name_by_id,
-        node_role_by_id=node_role_by_id,
     )
     task_graph["task_metadata"] = {
-        "task_name": "find_nearest_core_nodes",
+        "task_name": "find_nearest_reachable_role_tier_nodes",
         "split": split,
         "source_file": input_path.name,
+        "target_tier": target_tier,
+        "target_roles": list(target_roles),
+        "selection_strategy": "highest_reachable_role_tier_then_shortest_distance",
     }
     # 两个版本必须从同一个完整样本派生，避免再次随机选择源节点造成内容偏差。
     write_json(output_path_with_answer, task_graph, indent=indent)
@@ -372,22 +392,26 @@ def process_file(
         "file": str(input_path),
         "output_file_with_answer": str(output_path_with_answer),
         "output_file_without_answer": str(output_path_without_answer),
-        "source_node_name": source_name,
-        "nearest_core_count": len(nearest_core_ids),
+        "source_node_id": source,
+        "target_tier": target_tier,
+        "target_roles": "|".join(target_roles),
+        "nearest_target_count": len(nearest_target_ids),
         "shortest_path_length": path_length,
         "shortest_path_count": len(node_paths),
     }
 
 
 def write_stats_csv(output_root: Path, rows: list[dict[str, Any]]) -> None:
-    stats_path = output_root / "nearest_core_stats.csv"
+    stats_path = output_root / "nearest_target_stats.csv"
     fieldnames = [
         "split",
         "file",
         "output_file_with_answer",
         "output_file_without_answer",
-        "source_node_name",
-        "nearest_core_count",
+        "source_node_id",
+        "target_tier",
+        "target_roles",
+        "nearest_target_count",
         "shortest_path_length",
         "shortest_path_count",
     ]
@@ -412,7 +436,10 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
         "splits": {},
         "seed": args.seed,
         "source_role": "AP",
-        "target_role": "CORE",
+        "target_role_tiers": [
+            {"tier": tier_name, "roles": list(roles)}
+            for tier_name, roles in TARGET_ROLE_TIERS
+        ],
     }
     stats_rows: list[dict[str, Any]] = []
 
@@ -422,6 +449,9 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
             "input_files": len(input_files),
             "built_files": 0,
             "skipped_files": 0,
+            "built_by_target_tier": {
+                tier_name: 0 for tier_name, _ in TARGET_ROLE_TIERS
+            },
         }
         print(f"[{split}] found {len(input_files)} json files")
 
@@ -445,6 +475,9 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
                 split_summary["built_files"] += 1
                 if stats_row is not None:
                     stats_rows.append(stats_row)
+                    split_summary["built_by_target_tier"][
+                        stats_row["target_tier"]
+                    ] += 1
             else:
                 split_summary["skipped_files"] += 1
                 append_issue(
