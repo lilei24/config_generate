@@ -16,7 +16,8 @@ datasets/
 
 - task_source_node_id: 源节点 ID
 - task_target_node_id: 目标节点 ID
-- task_answer: 最短路径长度和所有最短节点 ID 路径
+- task_question: 要求输出全部最短路径及对应设备名称、角色序列的问题
+- task_answer: 最短路径长度、节点 ID 路径、角色序列和设备名称序列
 
 如果一张图无法找到连通的源/目标节点对，则跳过该 JSON，并把原因写入
 build_issues.jsonl。
@@ -108,12 +109,31 @@ def load_json(path: Path) -> tuple[dict[str, Any] | None, str]:
     return data, ""
 
 
-def get_node_ids(graph: dict[str, Any]) -> list[str]:
+def get_device(node: dict[str, Any]) -> dict[str, Any]:
+    device = node.get("device")
+    if device is None:
+        device = node.get("devices", {})
+    return device if isinstance(device, dict) else {}
+
+
+def get_node_role(node: dict[str, Any]) -> str:
+    topology_node = node.get("topologyNode")
+    if not isinstance(topology_node, dict):
+        return ""
+    role = topology_node.get("DEVICEROLE")
+    return str(role) if role is not None else ""
+
+
+def get_node_information(
+    graph: dict[str, Any],
+) -> tuple[list[str], dict[str, str], dict[str, str]]:
     nodes = graph.get("nodes")
     if not isinstance(nodes, list):
-        return []
+        return [], {}, {}
 
     node_ids: list[str] = []
+    node_name_by_id: dict[str, str] = {}
+    node_role_by_id: dict[str, str] = {}
     seen_node_ids: set[str] = set()
     for node in nodes:
         if not isinstance(node, dict):
@@ -124,8 +144,14 @@ def get_node_ids(graph: dict[str, Any]) -> list[str]:
             if node_id_str in seen_node_ids:
                 continue
             seen_node_ids.add(node_id_str)
+            device = get_device(node)
+            node_name = device.get("NAME")
             node_ids.append(node_id_str)
-    return node_ids
+            node_name_by_id[node_id_str] = (
+                str(node_name) if node_name is not None else node_id_str
+            )
+            node_role_by_id[node_id_str] = get_node_role(node)
+    return node_ids, node_name_by_id, node_role_by_id
 
 
 def build_adjacency(
@@ -210,10 +236,21 @@ def all_shortest_node_paths(
 
 def build_answer(
     node_paths: list[list[str]],
+    node_name_by_id: dict[str, str],
+    node_role_by_id: dict[str, str],
 ) -> dict[str, Any]:
+    ordered_paths = sorted(node_paths)
     return {
-        "path_length": len(node_paths[0]) - 1 if node_paths else None,
-        "paths": sorted(node_paths),
+        "path_length": len(ordered_paths[0]) - 1 if ordered_paths else None,
+        "paths": ordered_paths,
+        "path_role_sequences": [
+            [node_role_by_id.get(node_id, "") for node_id in path]
+            for path in ordered_paths
+        ],
+        "path_device_names": [
+            [node_name_by_id.get(node_id, node_id) for node_id in path]
+            for path in ordered_paths
+        ],
     }
 
 
@@ -262,7 +299,7 @@ def process_file(
     if graph is None:
         return False, f"load-json-error: {error}", None
 
-    node_ids = get_node_ids(graph)
+    node_ids, node_name_by_id, node_role_by_id = get_node_information(graph)
     if len(node_ids) < 2:
         return False, "not-enough-nodes", None
 
@@ -282,7 +319,16 @@ def process_file(
     task_graph = copy.deepcopy(graph)
     task_graph["task_source_node_id"] = source
     task_graph["task_target_node_id"] = target
-    task_graph["task_answer"] = build_answer(node_paths)
+    task_graph["task_question"] = (
+        f"请查找节点 ID {source} 到节点 ID {target} 的全部最短物理路径。"
+        "请输出最短路径长度、全部最短路径的节点 ID 序列，以及每条路径"
+        "对应的设备名称序列和 DEVICEROLE 序列。"
+    )
+    task_graph["task_answer"] = build_answer(
+        node_paths,
+        node_name_by_id,
+        node_role_by_id,
+    )
     task_graph["task_metadata"] = {
         "task_name": "shortest_path_between_two_nodes",
         "split": split,
