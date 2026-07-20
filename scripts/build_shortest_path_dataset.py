@@ -14,9 +14,9 @@ datasets/
 
 两套数据集都会保留 train/val 结构。每个输出 JSON 保留原始图结构，并在顶层新增：
 
-- task_source_node_name: 源节点名称
-- task_target_node_name: 目标节点名称
-- task_answer: 最短路径长度和所有最短节点名称路径
+- task_source_node_id: 源节点 ID
+- task_target_node_id: 目标节点 ID
+- task_answer: 最短路径长度和所有最短节点 ID 路径
 
 如果一张图无法找到连通的源/目标节点对，则跳过该 JSON，并把原因写入
 build_issues.jsonl。
@@ -108,31 +108,24 @@ def load_json(path: Path) -> tuple[dict[str, Any] | None, str]:
     return data, ""
 
 
-def get_device(node: dict[str, Any]) -> dict[str, Any]:
-    device = node.get("device")
-    if device is None:
-        device = node.get("devices", {})
-    return device if isinstance(device, dict) else {}
-
-
-def get_node_ids_and_names(graph: dict[str, Any]) -> tuple[list[str], dict[str, str]]:
+def get_node_ids(graph: dict[str, Any]) -> list[str]:
     nodes = graph.get("nodes")
     if not isinstance(nodes, list):
-        return [], {}
+        return []
 
     node_ids: list[str] = []
-    node_name_by_id: dict[str, str] = {}
+    seen_node_ids: set[str] = set()
     for node in nodes:
         if not isinstance(node, dict):
             continue
         node_id = node.get("id")
         if node_id is not None:
             node_id_str = str(node_id)
-            device = get_device(node)
-            node_name = device.get("NAME")
+            if node_id_str in seen_node_ids:
+                continue
+            seen_node_ids.add(node_id_str)
             node_ids.append(node_id_str)
-            node_name_by_id[node_id_str] = str(node_name) if node_name is not None else node_id_str
-    return node_ids, node_name_by_id
+    return node_ids
 
 
 def build_adjacency(
@@ -217,15 +210,10 @@ def all_shortest_node_paths(
 
 def build_answer(
     node_paths: list[list[str]],
-    node_name_by_id: dict[str, str],
 ) -> dict[str, Any]:
-    shortest_paths = [
-        [node_name_by_id.get(node_id, node_id) for node_id in node_path]
-        for node_path in node_paths
-    ]
     return {
         "path_length": len(node_paths[0]) - 1 if node_paths else None,
-        "paths": sorted(shortest_paths),
+        "paths": sorted(node_paths),
     }
 
 
@@ -274,7 +262,7 @@ def process_file(
     if graph is None:
         return False, f"load-json-error: {error}", None
 
-    node_ids, node_name_by_id = get_node_ids_and_names(graph)
+    node_ids = get_node_ids(graph)
     if len(node_ids) < 2:
         return False, "not-enough-nodes", None
 
@@ -292,9 +280,9 @@ def process_file(
         return False, "no-connected-node-pair-found", None
 
     task_graph = copy.deepcopy(graph)
-    task_graph["task_source_node_name"] = node_name_by_id.get(source, source)
-    task_graph["task_target_node_name"] = node_name_by_id.get(target, target)
-    task_graph["task_answer"] = build_answer(node_paths, node_name_by_id)
+    task_graph["task_source_node_id"] = source
+    task_graph["task_target_node_id"] = target
+    task_graph["task_answer"] = build_answer(node_paths)
     task_graph["task_metadata"] = {
         "task_name": "shortest_path_between_two_nodes",
         "split": split,
