@@ -243,20 +243,12 @@ def distribution(
     }
 
 
-def build_scope_statistics(results: List[GraphLeafRoleResult]) -> Dict[str, Any]:
-    valid_results = [result for result in results if result.status == "ok"]
-    role_counts: Counter[str] = Counter()
-    leaf_role_counts: Counter[str] = Counter()
-    for result in valid_results:
-        role_counts.update(result.role_counts)
-        leaf_role_counts.update(result.leaf_role_counts)
-
-    total_nodes = sum(result.node_count for result in valid_results)
-    total_leaf_nodes = sum(result.leaf_node_count for result in valid_results)
-    total_isolated_nodes = sum(
-        result.isolated_node_count for result in valid_results
-    )
-    role_terminal_rates = {
+def build_role_leaf_rates(
+    role_counts: Counter[str],
+    leaf_role_counts: Counter[str],
+) -> Dict[str, Dict[str, int | float]]:
+    """计算每种角色内部的叶子节点比例，而不是角色在叶子节点中的占比。"""
+    return {
         role: {
             "total_nodes": total_count,
             "leaf_nodes": leaf_role_counts.get(role, 0),
@@ -272,6 +264,21 @@ def build_scope_statistics(results: List[GraphLeafRoleResult]) -> Dict[str, Any]
             key=lambda item: (-item[1], item[0]),
         )
     }
+
+
+def build_scope_statistics(results: List[GraphLeafRoleResult]) -> Dict[str, Any]:
+    valid_results = [result for result in results if result.status == "ok"]
+    role_counts: Counter[str] = Counter()
+    leaf_role_counts: Counter[str] = Counter()
+    for result in valid_results:
+        role_counts.update(result.role_counts)
+        leaf_role_counts.update(result.leaf_role_counts)
+
+    total_nodes = sum(result.node_count for result in valid_results)
+    total_leaf_nodes = sum(result.leaf_node_count for result in valid_results)
+    total_isolated_nodes = sum(
+        result.isolated_node_count for result in valid_results
+    )
     return {
         "input_files": len(results),
         "analyzed_graphs": len(valid_results),
@@ -292,7 +299,10 @@ def build_scope_statistics(results: List[GraphLeafRoleResult]) -> Dict[str, Any]
         if total_nodes
         else 0.0,
         "leaf_role_distribution": distribution(leaf_role_counts),
-        "role_leaf_rates": role_terminal_rates,
+        "role_leaf_rates": build_role_leaf_rates(
+            role_counts,
+            leaf_role_counts,
+        ),
     }
 
 
@@ -313,8 +323,10 @@ def terminal_bar(count: int, total: int) -> str:
 def print_terminal_summary(results: List[GraphLeafRoleResult]) -> None:
     valid_results = [result for result in results if result.status == "ok"]
     role_counts: Counter[str] = Counter()
+    leaf_role_counts: Counter[str] = Counter()
     for result in valid_results:
-        role_counts.update(result.leaf_role_counts)
+        role_counts.update(result.role_counts)
+        leaf_role_counts.update(result.leaf_role_counts)
     total_nodes = sum(result.node_count for result in valid_results)
     total_leaf_nodes = sum(result.leaf_node_count for result in valid_results)
     total_isolated_nodes = sum(
@@ -340,11 +352,20 @@ def print_terminal_summary(results: List[GraphLeafRoleResult]) -> None:
     )
 
     print("\n--- 叶子节点 DEVICEROLE 分布 ---")
-    for role, count in role_counts.most_common():
+    for role, count in leaf_role_counts.most_common():
         percentage = count / total_leaf_nodes * 100 if total_leaf_nodes else 0.0
         print(
             f"  {role:24s}  {terminal_bar(count, total_leaf_nodes)}  "
             f"{count} ({percentage:.2f}%)"
+        )
+
+    print("\n--- 各 DEVICEROLE 成为叶子节点的比例 ---")
+    for role, total_count in role_counts.most_common():
+        leaf_count = leaf_role_counts.get(role, 0)
+        percentage = leaf_count / total_count * 100 if total_count else 0.0
+        print(
+            f"  {role:24s}  {terminal_bar(leaf_count, total_count)}  "
+            f"{leaf_count}/{total_count} ({percentage:.2f}%)"
         )
 
     skipped_files = len(results) - len(valid_results)
@@ -414,6 +435,10 @@ def build_statistics(
             else 0.0,
             "isolated_node_count": result.isolated_node_count,
             "leaf_role_distribution": distribution(result.leaf_role_counts),
+            "role_leaf_rates": build_role_leaf_rates(
+                result.role_counts,
+                result.leaf_role_counts,
+            ),
         }
         for result in results
         if result.status == "ok"
