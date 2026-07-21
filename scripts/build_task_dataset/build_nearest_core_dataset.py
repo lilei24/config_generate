@@ -12,10 +12,13 @@ without_answer 删除标准答案。每个输出 JSON 完整保留原始拓扑�
 任务源节点、自然语言问题和任务元数据。源节点严格选择 DEVICEROLE=AP 的节点。
 目标角色按以下优先级回退：
 
-1. CORE、Gateway+CORE；
-2. Gateway_vRR、Gateway、Firewall；
-3. AGG；
-4. ACC。
+1. CORE；
+2. Gateway+CORE；
+3. Gateway_vRR；
+4. Gateway；
+5. Firewall；
+6. AGG；
+7. ACC。
 
 只有当前层级不存在任何可达 AP→目标组合时才回退到下一层级。选择目标层级后，
 随机选择第一个能够到达该层级目标的 AP；如果多个目标距离相同，则保留到这些
@@ -41,11 +44,14 @@ DEFAULT_SPLITS = ("train", "val")
 DEFAULT_PROGRESS_INTERVAL = 100
 WITH_ANSWER_DIR_NAME = "with_answer"
 WITHOUT_ANSWER_DIR_NAME = "without_answer"
-TARGET_ROLE_TIERS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("core", ("CORE", "Gateway+CORE")),
-    ("gateway_or_firewall", ("Gateway_vRR", "Gateway", "Firewall")),
-    ("aggregation", ("AGG",)),
-    ("access", ("ACC",)),
+TARGET_ROLE_PRIORITY: tuple[tuple[str, str], ...] = (
+    ("core", "CORE"),
+    ("gateway_plus_core", "Gateway+CORE"),
+    ("gateway_vrr", "Gateway_vRR"),
+    ("gateway", "Gateway"),
+    ("firewall", "Firewall"),
+    ("aggregation", "AGG"),
+    ("access", "ACC"),
 )
 
 
@@ -253,17 +259,21 @@ def choose_source_and_nearest_targets(
     list[list[str]],
     int | None,
     str | None,
-    tuple[str, ...],
+    str | None,
+    int | None,
 ]:
     """优先选择最高目标层级，再随机选择一个可达该层级的 AP。"""
 
     candidates = list(ap_node_ids)
     rng.shuffle(candidates)
-    for tier_name, target_roles in TARGET_ROLE_TIERS:
+    for priority_rank, (tier_name, target_role) in enumerate(
+        TARGET_ROLE_PRIORITY,
+        start=1,
+    ):
         target_node_ids = [
             node_id
             for node_id, role in node_role_by_id.items()
-            if role in target_roles
+            if role == target_role
         ]
         if not target_node_ids:
             continue
@@ -280,9 +290,10 @@ def choose_source_and_nearest_targets(
                     paths,
                     path_length,
                     tier_name,
-                    target_roles,
+                    target_role,
+                    priority_rank,
                 )
-    return None, [], [], None, None, ()
+    return None, [], [], None, None, None, None
 
 
 def build_answer(
@@ -293,12 +304,6 @@ def build_answer(
         "path_length": path_length,
         "paths": sorted(node_paths),
     }
-
-
-def format_role_list(target_roles: tuple[str, ...]) -> str:
-    if len(target_roles) == 1:
-        return target_roles[0]
-    return "、".join(target_roles[:-1]) + " 或 " + target_roles[-1]
 
 
 def write_json(path: Path, data: dict[str, Any], indent: int) -> None:
@@ -338,9 +343,7 @@ def process_file(
     ]
     if not ap_node_ids:
         return False, "no-ap-role-node", None
-    supported_target_roles = {
-        role for _, roles in TARGET_ROLE_TIERS for role in roles
-    }
+    supported_target_roles = {role for _, role in TARGET_ROLE_PRIORITY}
     if not any(role in supported_target_roles for role in node_role_by_id.values()):
         return False, "no-supported-target-role-node", None
 
@@ -354,21 +357,28 @@ def process_file(
         node_paths,
         path_length,
         target_tier,
-        target_roles,
+        target_role,
+        target_priority_rank,
     ) = choose_source_and_nearest_targets(
         ap_node_ids,
         node_role_by_id,
         adjacency,
         rng,
     )
-    if source is None or path_length is None or target_tier is None:
+    if (
+        source is None
+        or path_length is None
+        or target_tier is None
+        or target_role is None
+        or target_priority_rank is None
+    ):
         return False, "no-ap-can-reach-supported-target", None
 
     task_graph = copy.deepcopy(graph)
     task_graph["task_source_node_id"] = source
     task_graph["task_question"] = (
         f"请查找从 AP 节点 ID {source} 到 DEVICEROLE 为 "
-        f"{format_role_list(target_roles)} 的最近设备的全部最短物理路径。"
+        f"{target_role} 的最近设备的全部最短物理路径。"
         "请输出最短跳数和全部最短路径，路径中的节点使用节点 ID。"
     )
     task_graph["task_answer"] = build_answer(
@@ -379,8 +389,10 @@ def process_file(
         "task_name": "find_nearest_reachable_role_tier_nodes",
         "split": split,
         "source_file": input_path.name,
+        "target_priority_rank": target_priority_rank,
         "target_tier": target_tier,
-        "target_roles": list(target_roles),
+        "target_role": target_role,
+        "target_roles": [target_role],
         "selection_strategy": "highest_reachable_role_tier_then_shortest_distance",
     }
     # 两个版本必须从同一个完整样本派生，避免再次随机选择源节点造成内容偏差。
@@ -395,8 +407,10 @@ def process_file(
         "output_file_with_answer": str(output_path_with_answer),
         "output_file_without_answer": str(output_path_without_answer),
         "source_node_id": source,
+        "target_priority_rank": target_priority_rank,
         "target_tier": target_tier,
-        "target_roles": "|".join(target_roles),
+        "target_role": target_role,
+        "target_roles": target_role,
         "nearest_target_count": len(nearest_target_ids),
         "shortest_path_length": path_length,
         "shortest_path_count": len(node_paths),
@@ -411,7 +425,9 @@ def write_stats_csv(output_root: Path, rows: list[dict[str, Any]]) -> None:
         "output_file_with_answer",
         "output_file_without_answer",
         "source_node_id",
+        "target_priority_rank",
         "target_tier",
+        "target_role",
         "target_roles",
         "nearest_target_count",
         "shortest_path_length",
@@ -438,9 +454,12 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
         "splits": {},
         "seed": args.seed,
         "source_role": "AP",
-        "target_role_tiers": [
-            {"tier": tier_name, "roles": list(roles)}
-            for tier_name, roles in TARGET_ROLE_TIERS
+        "target_role_priority": [
+            {"rank": rank, "tier": tier_name, "role": role}
+            for rank, (tier_name, role) in enumerate(
+                TARGET_ROLE_PRIORITY,
+                start=1,
+            )
         ],
     }
     stats_rows: list[dict[str, Any]] = []
@@ -452,7 +471,7 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
             "built_files": 0,
             "skipped_files": 0,
             "built_by_target_tier": {
-                tier_name: 0 for tier_name, _ in TARGET_ROLE_TIERS
+                tier_name: 0 for tier_name, _ in TARGET_ROLE_PRIORITY
             },
         }
         print(f"[{split}] found {len(input_files)} json files")

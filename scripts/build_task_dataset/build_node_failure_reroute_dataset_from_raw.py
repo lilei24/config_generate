@@ -4,10 +4,13 @@
 与依赖最近目标单样本的构建器不同，本脚本遍历每张图中的全部 AP。对每个 AP
 独立按照以下目标角色优先级选择其最高可达层级：
 
-1. CORE、Gateway+CORE；
-2. Gateway_vRR、Gateway、Firewall；
-3. AGG；
-4. ACC。
+1. CORE；
+2. Gateway+CORE；
+3. Gateway_vRR；
+4. Gateway；
+5. Firewall；
+6. AGG；
+7. ACC。
 
 在选定层级中查找最近目标及全部最短路径，枚举路径中间节点故障，并只保留故障
 后仍可到达原目标的候选。优先输出跳数增加的 detour，其次输出等长路径切换。
@@ -35,11 +38,14 @@ DEFAULT_MIN_BASELINE_PATH_NODE_COUNT = 3
 DEFAULT_SAMPLES_PER_GRAPH = 3
 WITH_ANSWER_DIR_NAME = "with_answer"
 WITHOUT_ANSWER_DIR_NAME = "without_answer"
-TARGET_ROLE_TIERS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("core", ("CORE", "Gateway+CORE")),
-    ("gateway_or_firewall", ("Gateway_vRR", "Gateway", "Firewall")),
-    ("aggregation", ("AGG",)),
-    ("access", ("ACC",)),
+TARGET_ROLE_PRIORITY: tuple[tuple[str, str], ...] = (
+    ("core", "CORE"),
+    ("gateway_plus_core", "Gateway+CORE"),
+    ("gateway_vrr", "Gateway_vRR"),
+    ("gateway", "Gateway"),
+    ("firewall", "Firewall"),
+    ("aggregation", "AGG"),
+    ("access", "ACC"),
 )
 
 
@@ -56,8 +62,9 @@ class RerouteCandidate:
     failed_node_id: str
     target_node_role: str
     failed_node_role: str
+    target_priority_rank: int
     target_tier: str
-    target_roles: tuple[str, ...]
+    target_role: str
     baseline_paths: list[list[str]]
     reroute_paths: list[list[str]]
     reroute_type: str
@@ -266,15 +273,25 @@ def select_nearest_targets_for_ap(
     source_id: str,
     node_role_by_id: dict[str, str],
     adjacency: dict[str, set[str]],
-) -> tuple[str | None, tuple[str, ...], list[str], dict[str, int], dict[str, list[str]]]:
+) -> tuple[
+    int | None,
+    str | None,
+    str | None,
+    list[str],
+    dict[str, int],
+    dict[str, list[str]],
+]:
     """为单个 AP 选择其最高可达目标层级和该层级内的最近目标。"""
 
     distances, parents = shortest_path_tree(adjacency, source_id)
-    for tier_name, target_roles in TARGET_ROLE_TIERS:
+    for priority_rank, (tier_name, target_role) in enumerate(
+        TARGET_ROLE_PRIORITY,
+        start=1,
+    ):
         reachable_targets = [
             node_id
             for node_id, role in node_role_by_id.items()
-            if role in target_roles and node_id in distances
+            if role == target_role and node_id in distances
         ]
         if not reachable_targets:
             continue
@@ -284,8 +301,15 @@ def select_nearest_targets_for_ap(
             for node_id in reachable_targets
             if distances[node_id] == minimum_distance
         )
-        return tier_name, target_roles, nearest_targets, distances, parents
-    return None, (), [], distances, parents
+        return (
+            priority_rank,
+            tier_name,
+            target_role,
+            nearest_targets,
+            distances,
+            parents,
+        )
+    return None, None, None, [], distances, parents
 
 
 def collect_reroute_candidates(
@@ -303,7 +327,7 @@ def collect_reroute_candidates(
     if not ap_node_ids:
         return [], {}, "no-ap-role-node"
 
-    supported_roles = {role for _, roles in TARGET_ROLE_TIERS for role in roles}
+    supported_roles = {role for _, role in TARGET_ROLE_PRIORITY}
     if not any(
         role in supported_roles for role in node_info.node_role_by_id.values()
     ):
@@ -327,8 +351,9 @@ def collect_reroute_candidates(
 
     for source_id in ap_node_ids:
         (
+            target_priority_rank,
             target_tier,
-            target_roles,
+            target_role,
             nearest_target_ids,
             distances,
             parents,
@@ -337,7 +362,11 @@ def collect_reroute_candidates(
             node_info.node_role_by_id,
             adjacency,
         )
-        if target_tier is None:
+        if (
+            target_priority_rank is None
+            or target_tier is None
+            or target_role is None
+        ):
             continue
         counters["aps_with_reachable_target_tier"] += 1
         counters["target_candidates"] += len(nearest_target_ids)
@@ -391,8 +420,9 @@ def collect_reroute_candidates(
                         failed_node_id,
                         "",
                     ),
+                    target_priority_rank=target_priority_rank,
                     target_tier=target_tier,
-                    target_roles=target_roles,
+                    target_role=target_role,
                     baseline_paths=baseline_paths,
                     reroute_paths=reroute_paths,
                     reroute_type=reroute_type,
@@ -489,8 +519,10 @@ def build_task_graph(
         "task_name": "node_failure_rerouting",
         "split": split,
         "source_file": source_file,
+        "target_priority_rank": candidate.target_priority_rank,
         "target_tier": candidate.target_tier,
-        "target_roles": list(candidate.target_roles),
+        "target_role": candidate.target_role,
+        "target_roles": [candidate.target_role],
         "construction": "enumerate_all_aps_from_raw_topology",
     }
     return task_graph
@@ -531,8 +563,10 @@ def candidate_stats_row(
         "failed_node_id": candidate.failed_node_id,
         "target_node_role": candidate.target_node_role,
         "failed_node_role": candidate.failed_node_role,
+        "target_priority_rank": candidate.target_priority_rank,
         "target_tier": candidate.target_tier,
-        "target_roles": "|".join(candidate.target_roles),
+        "target_role": candidate.target_role,
+        "target_roles": candidate.target_role,
         "reroute_type": candidate.reroute_type,
         "baseline_path_length": baseline_length,
         "baseline_path_count": len(candidate.baseline_paths),
@@ -554,7 +588,9 @@ def write_stats_csv(output_root: Path, rows: list[dict[str, Any]]) -> None:
         "failed_node_id",
         "target_node_role",
         "failed_node_role",
+        "target_priority_rank",
         "target_tier",
+        "target_role",
         "target_roles",
         "reroute_type",
         "baseline_path_length",
@@ -588,9 +624,12 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
         "seed": args.seed,
         "samples_per_graph": args.samples_per_graph,
         "minimum_baseline_path_node_count": args.min_baseline_path_node_count,
-        "target_role_tiers": [
-            {"tier": tier_name, "roles": list(roles)}
-            for tier_name, roles in TARGET_ROLE_TIERS
+        "target_role_priority": [
+            {"rank": rank, "tier": tier_name, "role": role}
+            for rank, (tier_name, role) in enumerate(
+                TARGET_ROLE_PRIORITY,
+                start=1,
+            )
         ],
         "selection_priority": ["detour", "equal_cost_failover"],
         "splits": {},
