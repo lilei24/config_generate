@@ -8,6 +8,7 @@ nearest_core_dataset/
 node_failure_reroute_dataset/
 opencode-results/
 opencode-harness-workspace/
+vlan-llm-analysis/
 QA/
 QA_token_analysis/
 __pycache__/
