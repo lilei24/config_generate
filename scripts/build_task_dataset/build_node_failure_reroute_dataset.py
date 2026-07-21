@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
-"""基于最近核心任务数据集构造单节点故障绕行任务。
+"""基于最近目标任务数据集构造单节点故障绕行任务。
 
 默认输入是 ``nearest_core_dataset/with_answer/{train,val}``。每张输入图已经包含
-一个源 AP，以及该 AP 到最近 CORE 的全部最短路径。本脚本执行以下处理：
+一个源 AP，以及该 AP 到当前最高可达目标层级的全部最短节点 ID 路径。本脚本
+执行以下处理：
 
-1. 筛选节点数大于 3 的基线最短路径；
-2. 从路径中间节点中选择一个故障节点，源 AP 和目标 CORE 不会被选中；
-3. 从图中移除故障节点及其关联链路，重新计算源节点到同一 CORE 的全部最短路径；
+1. 筛选节点数至少为 3 的基线最短路径；
+2. 从路径中间节点中选择一个故障节点，源 AP 和目标节点不会被选中；
+3. 从计算图中移除故障节点及其关联链路，重新计算源节点到同一目标的全部最短路径；
 4. 只保留故障后仍然可达的样本；
 5. 优先选择跳数增加的 detour，找不到时使用等长的 equal_cost_failover；
 6. 同时生成 with_answer 和 without_answer，两个版本除 task_answer 外完全一致。
 
-原“最近核心”任务的 question、answer 和 metadata 会被替换，避免旧答案泄漏到新任务。
+原“最近目标”任务的 question、answer 和 metadata 会被替换，避免旧答案泄漏到
+新任务。故障节点仍保留在原始拓扑中，只通过任务字段声明故障。
 """
 
 from __future__ import annotations
@@ -32,7 +34,7 @@ DEFAULT_OUTPUT_ROOT = Path("node_failure_reroute_dataset")
 DEFAULT_RANDOM_SEED = 20260715
 DEFAULT_SPLITS = ("train", "val")
 DEFAULT_PROGRESS_INTERVAL = 100
-MIN_BASELINE_PATH_NODE_COUNT = 4
+DEFAULT_MIN_BASELINE_PATH_NODE_COUNT = 3
 WITH_ANSWER_DIR_NAME = "with_answer"
 WITHOUT_ANSWER_DIR_NAME = "without_answer"
 
@@ -40,10 +42,7 @@ WITHOUT_ANSWER_DIR_NAME = "without_answer"
 @dataclass(frozen=True)
 class NodeInformation:
     node_ids: list[str]
-    node_name_by_id: dict[str, str]
     node_role_by_id: dict[str, str]
-    unique_node_id_by_name: dict[str, str]
-    ambiguous_node_names: set[str]
 
 
 @dataclass(frozen=True)
@@ -62,7 +61,7 @@ def parse_args() -> argparse.Namespace:
         "--input-root",
         type=Path,
         default=DEFAULT_INPUT_ROOT,
-        help=f"最近核心有答案数据集根目录，默认: {DEFAULT_INPUT_ROOT}",
+        help=f"最近目标有答案数据集根目录，默认: {DEFAULT_INPUT_ROOT}",
     )
     parser.add_argument(
         "--output-root",
@@ -89,12 +88,24 @@ def parse_args() -> argparse.Namespace:
         help=f"每处理多少个文件打印一次进度，默认: {DEFAULT_PROGRESS_INTERVAL}",
     )
     parser.add_argument(
+        "--min-baseline-path-node-count",
+        type=int,
+        default=DEFAULT_MIN_BASELINE_PATH_NODE_COUNT,
+        help=(
+            "可用于构造故障任务的基线路径最少节点数，默认: "
+            f"{DEFAULT_MIN_BASELINE_PATH_NODE_COUNT}"
+        ),
+    )
+    parser.add_argument(
         "--indent",
         type=int,
         default=2,
         help="输出 JSON 缩进，默认: 2",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.min_baseline_path_node_count < 3:
+        parser.error("--min-baseline-path-node-count 不能小于 3")
+    return args
 
 
 def iter_json_files(input_root: Path, split: str) -> list[Path]:
@@ -114,13 +125,6 @@ def load_json(path: Path) -> tuple[dict[str, Any] | None, str]:
     return data, ""
 
 
-def get_device(node: dict[str, Any]) -> dict[str, Any]:
-    device = node.get("device")
-    if device is None:
-        device = node.get("devices", {})
-    return device if isinstance(device, dict) else {}
-
-
 def get_node_role(node: dict[str, Any]) -> str:
     topology_node = node.get("topologyNode")
     if not isinstance(topology_node, dict):
@@ -132,12 +136,11 @@ def get_node_role(node: dict[str, Any]) -> str:
 def get_node_information(graph: dict[str, Any]) -> NodeInformation:
     nodes = graph.get("nodes")
     if not isinstance(nodes, list):
-        return NodeInformation([], {}, {}, {}, set())
+        return NodeInformation([], {})
 
     node_ids: list[str] = []
-    node_name_by_id: dict[str, str] = {}
     node_role_by_id: dict[str, str] = {}
-    node_ids_by_name: dict[str, list[str]] = defaultdict(list)
+    seen_node_ids: set[str] = set()
 
     for node in nodes:
         if not isinstance(node, dict):
@@ -147,26 +150,14 @@ def get_node_information(graph: dict[str, Any]) -> NodeInformation:
             continue
 
         node_id_str = str(node_id)
-        device = get_device(node)
-        node_name = device.get("NAME")
-        node_name_str = str(node_name) if node_name is not None else node_id_str
+        if node_id_str in seen_node_ids:
+            continue
+        seen_node_ids.add(node_id_str)
         node_ids.append(node_id_str)
-        node_name_by_id[node_id_str] = node_name_str
         node_role_by_id[node_id_str] = get_node_role(node)
-        node_ids_by_name[node_name_str].append(node_id_str)
-
-    unique_node_id_by_name = {
-        name: ids[0] for name, ids in node_ids_by_name.items() if len(ids) == 1
-    }
-    ambiguous_node_names = {
-        name for name, ids in node_ids_by_name.items() if len(ids) > 1
-    }
     return NodeInformation(
         node_ids=node_ids,
-        node_name_by_id=node_name_by_id,
         node_role_by_id=node_role_by_id,
-        unique_node_id_by_name=unique_node_id_by_name,
-        ambiguous_node_names=ambiguous_node_names,
     )
 
 
@@ -258,8 +249,29 @@ def all_shortest_node_paths(
     return sorted(paths)
 
 
-def extract_eligible_target_names(graph: dict[str, Any], source_name: str) -> list[str]:
-    """从上游最近核心答案中提取拥有长路径的目标 CORE 名称。"""
+def extract_target_roles(graph: dict[str, Any]) -> tuple[str | None, set[str]]:
+    task_metadata = graph.get("task_metadata")
+    if not isinstance(task_metadata, dict):
+        return None, set()
+    target_tier = task_metadata.get("target_tier")
+    target_roles = task_metadata.get("target_roles")
+    if not isinstance(target_tier, str) or not isinstance(target_roles, list):
+        return None, set()
+    roles = {
+        role for role in target_roles if isinstance(role, str) and role
+    }
+    return target_tier, roles
+
+
+def extract_eligible_target_ids(
+    graph: dict[str, Any],
+    source_id: str,
+    valid_node_ids: set[str],
+    target_roles: set[str],
+    node_role_by_id: dict[str, str],
+    min_path_node_count: int,
+) -> list[str]:
+    """从上游答案的节点 ID 路径中提取符合角色和长度要求的目标。"""
 
     task_answer = graph.get("task_answer")
     if not isinstance(task_answer, dict):
@@ -268,16 +280,21 @@ def extract_eligible_target_names(graph: dict[str, Any], source_name: str) -> li
     if not isinstance(answer_paths, list):
         return []
 
-    target_names: set[str] = set()
+    target_ids: set[str] = set()
     for path in answer_paths:
-        if not isinstance(path, list) or len(path) < MIN_BASELINE_PATH_NODE_COUNT:
+        if not isinstance(path, list) or len(path) < min_path_node_count:
             continue
-        if not all(isinstance(node_name, str) for node_name in path):
+        if not all(isinstance(node_id, str) for node_id in path):
             continue
-        if path[0] != source_name:
+        if path[0] != source_id or any(
+            node_id not in valid_node_ids for node_id in path
+        ):
             continue
-        target_names.add(path[-1])
-    return sorted(target_names)
+        target_id = path[-1]
+        if node_role_by_id.get(target_id) not in target_roles:
+            continue
+        target_ids.add(target_id)
+    return sorted(target_ids)
 
 
 def evaluate_candidates(
@@ -285,6 +302,7 @@ def evaluate_candidates(
     target_ids: list[str],
     adjacency: dict[str, set[str]],
     rng: random.Random,
+    min_path_node_count: int,
 ) -> tuple[RerouteCandidate | None, dict[str, int]]:
     """枚举可用故障节点，优先随机选择 detour，其次等长切换。"""
 
@@ -300,7 +318,7 @@ def evaluate_candidates(
 
     for target_id in target_ids:
         baseline_paths = all_shortest_node_paths(adjacency, source_id, target_id)
-        if not baseline_paths or len(baseline_paths[0]) < MIN_BASELINE_PATH_NODE_COUNT:
+        if not baseline_paths or len(baseline_paths[0]) < min_path_node_count:
             continue
 
         failed_node_ids = sorted(
@@ -351,16 +369,10 @@ def evaluate_candidates(
 
 def build_task_answer(
     candidate: RerouteCandidate,
-    node_name_by_id: dict[str, str],
 ) -> dict[str, Any]:
-    named_paths = [
-        [node_name_by_id.get(node_id, node_id) for node_id in path]
-        for path in candidate.reroute_paths
-    ]
     return {
-        "connected": True,
         "path_length": len(candidate.reroute_paths[0]) - 1,
-        "paths": sorted(named_paths),
+        "paths": sorted(candidate.reroute_paths),
     }
 
 
@@ -385,43 +397,40 @@ def process_file(
     output_path_without_answer: Path,
     split: str,
     rng: random.Random,
+    min_path_node_count: int,
     indent: int,
 ) -> tuple[bool, str, dict[str, Any] | None]:
     graph, error = load_json(input_path)
     if graph is None:
         return False, f"load-json-error: {error}", None
 
-    source_name = graph.get("task_source_node_name")
-    if not isinstance(source_name, str) or not source_name:
-        return False, "missing-task-source-node-name", None
+    source_id = graph.get("task_source_node_id")
+    if not isinstance(source_id, str) or not source_id:
+        return False, "missing-task-source-node-id", None
 
     node_info = get_node_information(graph)
     if not node_info.node_ids:
         return False, "no-valid-nodes", None
-    if source_name in node_info.ambiguous_node_names:
-        return False, "ambiguous-source-node-name", None
-    source_id = node_info.unique_node_id_by_name.get(source_name)
-    if source_id is None:
-        return False, "source-node-name-not-found", None
+    node_id_set = set(node_info.node_ids)
+    if source_id not in node_id_set:
+        return False, "source-node-id-not-found", None
 
-    eligible_target_names = extract_eligible_target_names(graph, source_name)
-    if not eligible_target_names:
-        return False, "no-baseline-path-with-more-than-3-nodes", None
+    target_tier, target_roles = extract_target_roles(graph)
+    if target_tier is None or not target_roles:
+        return False, "missing-target-tier-metadata", None
 
-    target_ids: list[str] = []
-    for target_name in eligible_target_names:
-        if target_name in node_info.ambiguous_node_names:
-            continue
-        target_id = node_info.unique_node_id_by_name.get(target_name)
-        if target_id is None:
-            continue
-        # 继续严格要求目标是 CORE，避免上游坏数据带入其他角色。
-        if node_info.node_role_by_id.get(target_id) == "CORE":
-            target_ids.append(target_id)
+    target_ids = extract_eligible_target_ids(
+        graph=graph,
+        source_id=source_id,
+        valid_node_ids=node_id_set,
+        target_roles=target_roles,
+        node_role_by_id=node_info.node_role_by_id,
+        min_path_node_count=min_path_node_count,
+    )
     if not target_ids:
-        return False, "no-unique-core-target-for-eligible-path", None
+        return False, "no-eligible-baseline-target", None
 
-    adjacency = build_adjacency(graph, set(node_info.node_ids))
+    adjacency = build_adjacency(graph, node_id_set)
     if not any(adjacency.values()):
         return False, "no-valid-links", None
 
@@ -430,47 +439,43 @@ def process_file(
         target_ids=target_ids,
         adjacency=adjacency,
         rng=rng,
+        min_path_node_count=min_path_node_count,
     )
     if candidate is None:
         if counters["failed_node_candidates"] == 0:
             return False, "no-intermediate-node-candidate", None
         return False, "all-intermediate-node-failures-disconnect-target", None
 
-    target_name = node_info.node_name_by_id.get(
-        candidate.target_id,
-        candidate.target_id,
-    )
-    failed_node_name = node_info.node_name_by_id.get(
-        candidate.failed_node_id,
-        candidate.failed_node_id,
-    )
-
     task_graph = copy.deepcopy(graph)
     for old_task_field in (
         "task_source_node_name",
         "task_target_node_name",
         "task_failed_node_name",
+        "task_source_node_id",
+        "task_target_node_id",
+        "task_failed_node_id",
         "task_question",
         "task_answer",
         "task_metadata",
     ):
         task_graph.pop(old_task_field, None)
 
-    task_graph["task_source_node_name"] = source_name
-    task_graph["task_target_node_name"] = target_name
-    task_graph["task_failed_node_name"] = failed_node_name
+    task_graph["task_source_node_id"] = source_id
+    task_graph["task_target_node_id"] = candidate.target_id
+    task_graph["task_failed_node_id"] = candidate.failed_node_id
     task_graph["task_question"] = (
-        f"设备 {failed_node_name} 发生故障。请查找 {source_name} 到 {target_name} "
-        "当前可用的全部最短物理路径，计算时不得经过该故障设备。"
+        f"节点 ID {candidate.failed_node_id} 发生故障。请查找节点 ID {source_id} "
+        f"到节点 ID {candidate.target_id} 当前可用的全部最短物理路径，"
+        "计算时不得经过该故障节点。请输出最短跳数和全部最短路径，"
+        "路径中的节点使用节点 ID。"
     )
-    task_graph["task_answer"] = build_task_answer(
-        candidate,
-        node_info.node_name_by_id,
-    )
+    task_graph["task_answer"] = build_task_answer(candidate)
     task_graph["task_metadata"] = {
         "task_name": "node_failure_rerouting",
         "split": split,
         "source_file": input_path.name,
+        "target_tier": target_tier,
+        "target_roles": sorted(target_roles),
     }
 
     write_json(output_path_with_answer, task_graph, indent=indent)
@@ -485,9 +490,11 @@ def process_file(
         "file": str(input_path),
         "output_file_with_answer": str(output_path_with_answer),
         "output_file_without_answer": str(output_path_without_answer),
-        "source_node_name": source_name,
-        "target_node_name": target_name,
-        "failed_node_name": failed_node_name,
+        "source_node_id": source_id,
+        "target_node_id": candidate.target_id,
+        "failed_node_id": candidate.failed_node_id,
+        "target_tier": target_tier,
+        "target_roles": "|".join(sorted(target_roles)),
         "failed_node_role": node_info.node_role_by_id.get(
             candidate.failed_node_id,
             "",
@@ -509,9 +516,11 @@ def write_stats_csv(output_root: Path, rows: list[dict[str, Any]]) -> None:
         "file",
         "output_file_with_answer",
         "output_file_without_answer",
-        "source_node_name",
-        "target_node_name",
-        "failed_node_name",
+        "source_node_id",
+        "target_node_id",
+        "failed_node_id",
+        "target_tier",
+        "target_roles",
         "failed_node_role",
         "reroute_type",
         "baseline_path_length",
@@ -545,7 +554,7 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
         "without_answer_root": str(args.output_root / WITHOUT_ANSWER_DIR_NAME),
         "splits": {},
         "seed": args.seed,
-        "minimum_baseline_path_node_count": MIN_BASELINE_PATH_NODE_COUNT,
+        "minimum_baseline_path_node_count": args.min_baseline_path_node_count,
         "selection_priority": ["detour", "equal_cost_failover"],
     }
     stats_rows: list[dict[str, Any]] = []
@@ -558,6 +567,7 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
             "skipped_files": 0,
             "detour_files": 0,
             "equal_cost_failover_files": 0,
+            "built_by_target_tier": {},
         }
         print(f"[{split}] found {len(input_files)} json files")
 
@@ -575,6 +585,7 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
                 output_path_without_answer=output_path_without_answer,
                 split=split,
                 rng=rng,
+                min_path_node_count=args.min_baseline_path_node_count,
                 indent=args.indent,
             )
             if ok:
@@ -583,6 +594,11 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
                     stats_rows.append(stats_row)
                     reroute_type = stats_row["reroute_type"]
                     split_summary[f"{reroute_type}_files"] += 1
+                    target_tier = stats_row["target_tier"]
+                    split_summary["built_by_target_tier"][target_tier] = (
+                        split_summary["built_by_target_tier"].get(target_tier, 0)
+                        + 1
+                    )
             else:
                 split_summary["skipped_files"] += 1
                 append_issue(
