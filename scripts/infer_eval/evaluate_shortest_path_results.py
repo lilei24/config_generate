@@ -448,6 +448,48 @@ def log_swanlab_metrics(
     swanlab.log(payload, step=step)
 
 
+def json_table_text(value: Any) -> str:
+    if value is None:
+        return ""
+    return json.dumps(value, ensure_ascii=False, indent=2)
+
+
+def build_sample_table_row(
+    json_name: str,
+    document: dict[str, Any] | None,
+) -> list[str]:
+    if document is None:
+        return [json_name, "", "", ""]
+    context = {
+        key: value
+        for key, value in document.items()
+        if key not in {"task_answer", "model-output", "vllm-run"}
+    }
+    return [
+        json_name,
+        json_table_text(context),
+        json_table_text(document.get("task_answer")),
+        json_table_text(document.get("model-output")),
+    ]
+
+
+def log_sample_table(swanlab: Any | None, table_rows: list[list[str]]) -> None:
+    if swanlab is None:
+        return
+    echarts = getattr(swanlab, "echarts", None)
+    table_class = getattr(echarts, "Table", None) if echarts is not None else None
+    if table_class is None:
+        raise RuntimeError(
+            "当前 SwanLab 版本不支持 swanlab.echarts.Table，请升级 SwanLab"
+        )
+    table = table_class()
+    table.add(
+        ["json_name", "context", "answer", "model-output"],
+        table_rows,
+    )
+    swanlab.log({"sample/details": table})
+
+
 def finish_swanlab(swanlab: Any | None) -> None:
     if swanlab is None:
         return
@@ -466,11 +508,13 @@ def main() -> None:
 
     rows: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
+    sample_table_rows: list[list[str]] = []
     metric_sums = {name: 0.0 for name in METRIC_NAMES}
     successful_model_returns = 0
     swanlab = init_swanlab(args, result_path)
 
     for index, (split, path, relative_path) in enumerate(sample_items, start=1):
+        document: dict[str, Any] | None = None
         metrics = SampleMetrics()
         counts = {
             "predicted_path_count": 0,
@@ -498,6 +542,11 @@ def main() -> None:
             metrics, counts = evaluate_document(document)
         except Exception as error:  # noqa: BLE001 - 坏结果记零并继续。
             error_reason = f"{type(error).__name__}: {error}"
+
+        json_name = (
+            relative_path if split == "single" else f"{split}/{relative_path}"
+        )
+        sample_table_rows.append(build_sample_table_row(json_name, document))
 
         metric_values = asdict(metrics)
         for name in METRIC_NAMES:
@@ -568,6 +617,7 @@ def main() -> None:
         json.dumps(summary, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
+    log_sample_table(swanlab, sample_table_rows)
     finish_swanlab(swanlab)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 
