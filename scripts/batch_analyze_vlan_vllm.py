@@ -27,69 +27,13 @@ DEFAULT_PROGRESS_INTERVAL = 1
 SUMMARY_FILE = "vlan_llm_analysis_summary.json"
 FAILURE_FILE = "vlan_llm_analysis_failures.csv"
 
-SYSTEM_PROMPT = """你是一名网络拓扑与网络配置分析专家。你的任务是分析完整站点拓扑中的 VLAN 配置、绑定关系和潜在异常。必须严格依据输入 JSON，不得补充输入中不存在的设备、VLAN、接口或连接关系。只输出一个合法 JSON 对象，不要输出 Markdown 代码块、解释文字或思考过程。"""
+SYSTEM_PROMPT = """你是一名网络拓扑与网络配置分析专家。请严格依据用户提供的完整网络拓扑，使用中文说明你对其中 VLAN 情况的理解，不得补充输入中不存在的设备、VLAN、接口或连接关系。不要输出思考过程。"""
 
 USER_PROMPT_TEMPLATE = """请分析下面完整网络拓扑 JSON 中的 VLAN 情况。
 
-分析要求：
-1. 识别 node、deviceGroup、link 以及其他位置中所有 VLAN 相关配置，不要只检查字段名恰好等于 vlan 的字段。
-2. 区分 VLAN 定义、Access/PVID 绑定、Trunk 放行、Native VLAN、业务引用、设备组绑定和无法确定的语义。
-3. VLAN ID 可能是整数、数字字符串、列表、逗号分隔字符串或范围表达式。不能可靠解析时保留原始值并标记为不确定。
-4. 对每项结论提供输入中的 JSON 路径作为证据；数组下标使用实际下标，例如 nodes[3].configs[0]。
-5. 分析重复定义、冲突配置、无对应定义的引用、非法 VLAN ID 或其他可从输入直接判断的异常。
-6. 不要仅凭相同 VLAN ID 推断真实业务流已经连通；无法确定的信息放入 uncertain_items。
+请直接回复你对这个网络拓扑中 VLAN 的理解，不需要返回 JSON 或其他固定数据结构。重点说明拓扑中有哪些 VLAN 相关配置、这些配置涉及哪些节点或设备组、可能表达什么网络关系，以及有哪些值得注意或无法确定的地方。
 
-请严格返回以下结构，允许数组为空，但不要省略字段：
-{{
-  "summary": {{
-    "has_vlan_configuration": true,
-    "vlan_id_count": 0,
-    "vlan_entry_count": 0,
-    "affected_node_count": 0
-  }},
-  "vlan_ids": [],
-  "vlan_entries": [
-    {{
-      "vlan_id": null,
-      "raw_value": null,
-      "vlan_name": null,
-      "semantic_type": "definition|access_binding|trunk_allowed|native_vlan|service_reference|device_group_binding|unknown",
-      "scope": "node|deviceGroup|link|other",
-      "top_level_config_key": null,
-      "node_ids": [],
-      "device_names": [],
-      "device_types": [],
-      "device_roles": [],
-      "evidence_paths": [],
-      "confidence": "high|medium|low"
-    }}
-  ],
-  "node_vlan_bindings": [
-    {{
-      "node_id": "",
-      "device_name": null,
-      "vlan_ids": [],
-      "binding_types": [],
-      "evidence_paths": []
-    }}
-  ],
-  "device_group_vlan_bindings": [],
-  "vlan_relationships": [],
-  "anomalies": [
-    {{
-      "type": "",
-      "description": "",
-      "evidence_paths": [],
-      "confidence": "high|medium|low"
-    }}
-  ],
-  "uncertain_items": [
-    {{
-      "description": "",
-      "evidence_paths": []
-    }}
-  ]
-}}
+请使用简洁的中文标题和分点描述组织回复，使结果便于人工阅读。不要输出输入中没有依据的结论，也不要仅凭相同 VLAN ID 推断业务一定连通。
 
 【完整网络拓扑 JSON】
 {topology_json}
@@ -201,26 +145,10 @@ def iter_json_files(dataset_root: Path, split: str) -> list[Path]:
     return sorted(path for path in split_dir.rglob("*.json") if path.is_file())
 
 
-def strip_markdown_code_fence(text: str) -> str:
-    stripped = text.strip()
-    if not stripped.startswith("```"):
-        return stripped
-    lines = stripped.splitlines()
-    if lines and lines[0].strip().startswith("```"):
-        lines = lines[1:]
-    if lines and lines[-1].strip() == "```":
-        lines = lines[:-1]
-    return "\n".join(lines).strip()
+def format_model_output(content: str) -> list[str]:
+    """按非空行保存自然语言回复，避免 JSON 字符串中出现大量转义换行。"""
 
-
-def parse_model_json(content: str) -> dict[str, Any]:
-    candidate = strip_markdown_code_fence(content)
-    parsed = json.loads(candidate)
-    if not isinstance(parsed, dict):
-        raise ValueError(
-            f"模型输出顶层类型为 {type(parsed).__name__}，预期为 object"
-        )
-    return parsed
+    return [line.rstrip() for line in content.strip().splitlines() if line.strip()]
 
 
 def build_user_prompt(graph: dict[str, Any]) -> str:
@@ -299,8 +227,11 @@ def make_error_result(
         "model": model,
         "request_attempts": request_attempts,
         "elapsed_seconds": round(elapsed_seconds, 3),
-        "analysis": None,
-        "model-output": raw_model_output,
+        "model-output": (
+            format_model_output(raw_model_output)
+            if raw_model_output is not None
+            else None
+        ),
         "error_stage": stage,
         "error": f"{type(error).__name__}: {error}",
     }
@@ -361,22 +292,6 @@ def process_file(
         write_json_atomic(output_path, result)
         return {**result, "output_path": str(output_path)}
 
-    try:
-        analysis = parse_model_json(raw_output)
-    except Exception as error:  # noqa: BLE001 - 原始回答需保留以便排查。
-        result = make_error_result(
-            split,
-            source_file,
-            args.model,
-            "model_output_parse",
-            error,
-            time.time() - started_at,
-            raw_model_output=raw_output,
-            request_attempts=attempts,
-        )
-        write_json_atomic(output_path, result)
-        return {**result, "output_path": str(output_path)}
-
     result = {
         "source_file": source_file,
         "split": split,
@@ -384,8 +299,7 @@ def process_file(
         "model": args.model,
         "request_attempts": attempts,
         "elapsed_seconds": round(time.time() - started_at, 3),
-        "analysis": analysis,
-        "model-output": raw_output,
+        "model-output": format_model_output(raw_output),
         "error_stage": None,
         "error": None,
     }
@@ -485,6 +399,7 @@ def run(args: argparse.Namespace) -> None:
         "model": args.model,
         "splits": splits,
         "context_mode": "full_json_without_truncation",
+        "response_format": "Chinese natural-language lines",
         "thinking_enabled": args.enable_thinking,
         "input_files": total_files,
         "succeeded_files": succeeded,
