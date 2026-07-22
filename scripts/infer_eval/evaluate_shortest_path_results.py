@@ -1,20 +1,24 @@
 #!/usr/bin/env python3
-"""评价 vLLM 两节点全部最短路径结果，输出逐样本和 Macro 汇总指标。"""
+"""评价单个或一批 vLLM 最短路径结果，并将指标记录到 SwanLab。"""
 
 from __future__ import annotations
 
 import argparse
 import csv
 import json
+import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
 
-DEFAULT_RESULT_ROOT = Path("vllm-results/shortest_path")
+DEFAULT_RESULT_PATH = Path("vllm-results/shortest_path")
 DEFAULT_OUTPUT_DIR = Path("vllm-results/shortest_path-evaluation")
 DEFAULT_SPLIT = "val"
 DEFAULT_PROGRESS_INTERVAL = 100
+DEFAULT_SWANLAB_PROJECT = "topology-shortest-path"
+DEFAULT_SWANLAB_EXPERIMENT = "shortest-path-evaluation"
+DEFAULT_SWANLAB_MODE = "cloud"
 
 METRIC_NAMES = (
     "path_length_accuracy",
@@ -43,10 +47,14 @@ class SampleMetrics:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--result-root",
+        "result_path",
+        nargs="?",
         type=Path,
-        default=DEFAULT_RESULT_ROOT,
-        help="vLLM 推理结果根目录，默认: %(default)s",
+        default=DEFAULT_RESULT_PATH,
+        help=(
+            "一个同时包含 task_answer 和 model-output 的结果 JSON；"
+            "也可传入结果根目录进行批量评价，默认: %(default)s"
+        ),
     )
     parser.add_argument(
         "--output-dir",
@@ -66,10 +74,41 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_PROGRESS_INTERVAL,
         help="每处理 N 个文件打印进度，0 表示关闭，默认: %(default)s",
     )
+    parser.add_argument(
+        "--swanlab-project",
+        default=DEFAULT_SWANLAB_PROJECT,
+        help="SwanLab 项目名称，默认: %(default)s",
+    )
+    parser.add_argument(
+        "--swanlab-experiment",
+        default=DEFAULT_SWANLAB_EXPERIMENT,
+        help="SwanLab 实验名称，默认: %(default)s",
+    )
+    parser.add_argument(
+        "--swanlab-mode",
+        default=DEFAULT_SWANLAB_MODE,
+        help="SwanLab 运行模式，默认: %(default)s",
+    )
+    parser.add_argument(
+        "--disable-swanlab",
+        action="store_true",
+        help="只生成本地评价文件，不初始化和上传 SwanLab",
+    )
     args = parser.parse_args()
     if args.progress_interval < 0:
         parser.error("--progress-interval 不能小于 0")
     return args
+
+
+def import_swanlab() -> Any:
+    try:
+        import swanlab
+    except ImportError as error:
+        raise RuntimeError(
+            "缺少 swanlab 依赖，请先执行: pip install swanlab；"
+            "如只需本地评价可使用 --disable-swanlab"
+        ) from error
+    return swanlab
 
 
 def load_json_object(path: Path) -> dict[str, Any]:
@@ -330,32 +369,108 @@ def write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, Any]]) -> 
         writer.writerows(rows)
 
 
+def collect_sample_items(
+    result_path: Path,
+    split: str,
+) -> list[tuple[str, Path, str]]:
+    """返回 (split, 文件路径, 展示名称)，单文件和批量目录使用同一评价流程。"""
+
+    if result_path.is_file():
+        if result_path.suffix.lower() != ".json":
+            raise ValueError(f"结果文件必须是 JSON: {result_path}")
+        return [("single", result_path, result_path.name)]
+    if not result_path.is_dir():
+        raise FileNotFoundError(f"结果文件或目录不存在: {result_path}")
+
+    selected_splits = ["train", "val"] if split == "all" else [split]
+    existing_split_dirs = [
+        (item, result_path / item)
+        for item in selected_splits
+        if (result_path / item).is_dir()
+    ]
+    items: list[tuple[str, Path, str]] = []
+    if existing_split_dirs:
+        missing_splits = [
+            item for item in selected_splits if not (result_path / item).is_dir()
+        ]
+        if missing_splits:
+            raise FileNotFoundError(
+                "缺少推理结果划分目录: " + ", ".join(missing_splits)
+            )
+        for split_name, split_root in existing_split_dirs:
+            for path in sorted(split_root.rglob("*.json")):
+                if path.is_file():
+                    items.append(
+                        (split_name, path, str(path.relative_to(split_root)))
+                    )
+        return items
+
+    # 允许直接传入 vllm-results/shortest_path/val 这样的划分目录。
+    direct_split = split if split != "all" else result_path.name
+    return [
+        (direct_split, path, str(path.relative_to(result_path)))
+        for path in sorted(result_path.rglob("*.json"))
+        if path.is_file()
+    ]
+
+
+def init_swanlab(args: argparse.Namespace, result_path: Path) -> Any | None:
+    if args.disable_swanlab:
+        return None
+    swanlab = import_swanlab()
+    swanlab.init(
+        project=args.swanlab_project,
+        experiment_name=args.swanlab_experiment,
+        mode=args.swanlab_mode,
+        config={
+            "script": Path(sys.argv[0]).name,
+            "result_path": str(result_path),
+            "split": args.split,
+            "aggregation": "running macro average",
+            "metrics": list(METRIC_NAMES),
+        },
+    )
+    return swanlab
+
+
+def log_swanlab_metrics(
+    swanlab: Any | None,
+    step: int,
+    sample_metrics: dict[str, float],
+    metric_sums: dict[str, float],
+) -> None:
+    if swanlab is None:
+        return
+    payload: dict[str, float] = {}
+    for name in METRIC_NAMES:
+        payload[f"sample/{name}"] = float(sample_metrics[name])
+        payload[f"eval/{name}"] = float(metric_sums[name] / step)
+    swanlab.log(payload, step=step)
+
+
+def finish_swanlab(swanlab: Any | None) -> None:
+    if swanlab is None:
+        return
+    finish = getattr(swanlab, "finish", None)
+    if callable(finish):
+        finish()
+
+
 def main() -> None:
     args = parse_args()
-    result_root = args.result_root.resolve()
+    result_path = args.result_path.resolve()
     output_dir = args.output_dir.resolve()
-    splits = ["train", "val"] if args.split == "all" else [args.split]
-
-    sample_items: list[tuple[str, Path]] = []
-    for split in splits:
-        split_root = result_root / split
-        if not split_root.is_dir():
-            raise FileNotFoundError(f"推理结果目录不存在: {split_root}")
-        sample_items.extend(
-            (split, path)
-            for path in sorted(split_root.rglob("*.json"))
-            if path.is_file()
-        )
+    sample_items = collect_sample_items(result_path, args.split)
     if not sample_items:
-        raise FileNotFoundError(f"没有找到推理结果 JSON: {result_root}")
+        raise FileNotFoundError(f"没有找到推理结果 JSON: {result_path}")
 
     rows: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
     metric_sums = {name: 0.0 for name in METRIC_NAMES}
     successful_model_returns = 0
+    swanlab = init_swanlab(args, result_path)
 
-    for index, (split, path) in enumerate(sample_items, start=1):
-        relative_path = str(path.relative_to(result_root / split))
+    for index, (split, path, relative_path) in enumerate(sample_items, start=1):
         metrics = SampleMetrics()
         counts = {
             "predicted_path_count": 0,
@@ -387,6 +502,12 @@ def main() -> None:
         metric_values = asdict(metrics)
         for name in METRIC_NAMES:
             metric_sums[name] += metric_values[name]
+        log_swanlab_metrics(
+            swanlab,
+            step=index,
+            sample_metrics=metric_values,
+            metric_sums=metric_sums,
+        )
         row = {
             "split": split,
             "source_file": relative_path,
@@ -411,9 +532,9 @@ def main() -> None:
         name: round(metric_sums[name] / sample_count, 8) for name in METRIC_NAMES
     }
     summary = {
-        "result_root": str(result_root),
+        "result_path": str(result_path),
         "output_dir": str(output_dir),
-        "splits": splits,
+        "splits": sorted({item[0] for item in sample_items}),
         "aggregation": "macro: evaluate each sample, then average",
         "sample_count": sample_count,
         "successful_model_returns": successful_model_returns,
@@ -447,6 +568,7 @@ def main() -> None:
         json.dumps(summary, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
+    finish_swanlab(swanlab)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 
 
