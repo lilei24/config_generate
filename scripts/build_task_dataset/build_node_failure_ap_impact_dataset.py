@@ -19,7 +19,7 @@ DEFAULT_OUTPUT_ROOT = Path("node_failure_ap_impact_dataset")
 DEFAULT_RANDOM_SEED = 20260723
 DEFAULT_SPLITS = ("train", "val")
 DEFAULT_PROGRESS_INTERVAL = 50
-DEFAULT_SAMPLES_PER_GRAPH = 4
+DEFAULT_SAMPLES_PER_GRAPH = 3
 
 WITH_ANSWER_DIR_NAME = "with_answer"
 WITHOUT_ANSWER_DIR_NAME = "without_answer"
@@ -37,7 +37,7 @@ TARGET_ROLE_PRIORITY: tuple[tuple[str, str], ...] = (
     ("access", "ACC"),
 )
 
-IMPACT_LEVEL_ORDER = ("large", "medium", "small", "no_impact")
+IMPACT_LEVEL_ORDER = ("small", "medium", "large")
 
 QUESTION_TEMPLATE = """正常情况下，每个 AP 都以自己能够到达的最高优先级设备作为上游目标。
 
@@ -113,12 +113,10 @@ def parse_args() -> argparse.Namespace:
         "--samples-per-graph",
         type=int,
         default=DEFAULT_SAMPLES_PER_GRAPH,
-        help="每张图最多生成的故障任务数，默认: %(default)s",
-    )
-    parser.add_argument(
-        "--exclude-no-impact",
-        action="store_true",
-        help="不生成 disconnected_ap_ids 为空的负样本",
+        help=(
+            "每张图最多生成的故障任务数；按 small、medium、large "
+            "各选一个，最大有效值为 3，默认: %(default)s"
+        ),
     )
     parser.add_argument(
         "--progress-interval",
@@ -128,8 +126,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--indent", type=int, default=2)
     args = parser.parse_args()
-    if args.samples_per_graph < 1:
-        parser.error("--samples-per-graph 必须大于等于 1")
+    if not 1 <= args.samples_per_graph <= len(IMPACT_LEVEL_ORDER):
+        parser.error("--samples-per-graph 必须在 1 到 3 之间")
     if args.progress_interval < 0:
         parser.error("--progress-interval 不能小于 0")
     if args.indent < 0:
@@ -360,7 +358,6 @@ def collect_candidates(
     node_info: NodeInformation,
     adjacency: dict[str, set[str]],
     baselines: dict[str, BaselineTarget],
-    exclude_no_impact: bool,
 ) -> list[ImpactCandidate]:
     candidates: list[ImpactCandidate] = []
     for failed_node_id in node_info.node_ids:
@@ -372,7 +369,7 @@ def collect_candidates(
             baselines,
             failed_node_id,
         )
-        if exclude_no_impact and not disconnected_ap_ids:
+        if not disconnected_ap_ids:
             continue
         candidates.append(
             ImpactCandidate(
@@ -389,7 +386,7 @@ def select_candidates(
     samples_per_graph: int,
     rng: random.Random,
 ) -> list[ImpactCandidate]:
-    """每个影响等级优先选一个，再从剩余候选中固定随机补齐。"""
+    """从 small、medium、large 三个影响等级中各固定随机选择一个。"""
 
     by_level: dict[str, list[ImpactCandidate]] = {
         level: [] for level in IMPACT_LEVEL_ORDER
@@ -403,10 +400,6 @@ def select_candidates(
     for level in IMPACT_LEVEL_ORDER:
         if by_level[level] and len(selected) < samples_per_graph:
             selected.append(by_level[level].pop())
-
-    remaining = [item for level in IMPACT_LEVEL_ORDER for item in by_level[level]]
-    rng.shuffle(remaining)
-    selected.extend(remaining[: max(0, samples_per_graph - len(selected))])
     return selected
 
 
@@ -543,9 +536,7 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
         "without_answer_root": str(output_root / WITHOUT_ANSWER_DIR_NAME),
         "seed": args.seed,
         "samples_per_graph": args.samples_per_graph,
-        "include_no_impact_samples": not args.exclude_no_impact,
         "impact_levels": {
-            "no_impact": "0 disconnected APs",
             "small": "1-5 disconnected APs",
             "medium": "6-20 disconnected APs",
             "large": ">20 disconnected APs",
@@ -554,7 +545,8 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
             {"rank": rank, "tier": tier, "role": role}
             for rank, (tier, role) in enumerate(TARGET_ROLE_PRIORITY, start=1)
         ],
-        "selection_strategy": "one_per_impact_level_then_random_fill",
+        "sampled_impact_levels": list(IMPACT_LEVEL_ORDER),
+        "selection_strategy": "one_each_from_small_medium_large_without_fill",
         "splits": {},
     }
 
@@ -605,7 +597,6 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
                                 node_info,
                                 adjacency,
                                 baselines,
-                                args.exclude_no_impact,
                             )
                             if not candidates:
                                 reason = "no-eligible-non-ap-failure-candidate"
