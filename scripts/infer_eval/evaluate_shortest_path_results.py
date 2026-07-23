@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""评价单个或一批 vLLM 最短路径结果，并将指标记录到 SwanLab。"""
+"""评价单个或一批最短路径推理结果，并将指标记录到 SwanLab。"""
 
 from __future__ import annotations
 
@@ -463,7 +463,12 @@ def build_sample_table_row(
     context = {
         key: value
         for key, value in document.items()
-        if key not in {"task_answer", "model-output", "vllm-run"}
+        if key not in {
+            "task_answer",
+            "model-output",
+            "vllm-run",
+            "opencode-run",
+        }
     }
     return [
         json_name,
@@ -528,6 +533,8 @@ def main() -> None:
         try:
             document = load_json_object(path)
             run_info = document.get("vllm-run")
+            if not isinstance(run_info, dict):
+                run_info = document.get("opencode-run")
             model_returned = bool(
                 isinstance(run_info, dict)
                 and run_info.get("success") is True
@@ -538,7 +545,7 @@ def main() -> None:
             elif isinstance(run_info, dict):
                 error_reason = str(run_info.get("error") or "model-output unavailable")
             else:
-                error_reason = "missing vllm-run"
+                error_reason = "missing inference run metadata"
             metrics, counts = evaluate_document(document)
         except Exception as error:  # noqa: BLE001 - 坏结果记零并继续。
             error_reason = f"{type(error).__name__}: {error}"
