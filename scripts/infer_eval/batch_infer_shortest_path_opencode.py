@@ -1,18 +1,11 @@
 #!/usr/bin/env python3
-"""从站点列表批量调用 OpenCode，完成两节点全部最短路径任务。
+"""批量调用 OpenCode，完成两节点全部最短路径任务。
 
-站点列表是 UTF-8 文本文件，每行一个站点名称。空行和以 ``#`` 开头的行会被
-忽略。站点名称可以写成以下任一形式：
-
-- site_a
-- site_a.json
-- 子目录/site_a
-- 子目录/site_a.json
-
-脚本从 shortest_path_dataset/without_answer/{split} 中找到对应任务样本，提取
-源节点 ID 和目标节点 ID 并构造提示词。OpenCode 的回答不会写回标准答案目录，
-而是复制对应的 with_answer 样本，再在输出文件中增加 ``model-output`` 和
-``opencode-run`` 字段，方便后续与 ``task_answer`` 对照评估。
+脚本直接扫描 shortest_path_dataset/without_answer/{split} 下的 JSON，使用
+包含 ``.json`` 后缀的文件名作为站点名称，并提取源节点 ID 和目标节点 ID
+构造提示词。OpenCode 的回答不会写回标准答案目录，而是复制对应的 with_answer
+样本，再在输出文件中增加 ``model-output`` 和 ``opencode-run`` 字段，方便
+后续与 ``task_answer`` 对照评估。
 
 OpenCode 使用 ``--format json`` 时返回的是 JSON 事件流。脚本会保留原始事件，
 提取最后一个可解析的 assistant JSON，并校验最短路径回答的基本结构。
@@ -30,7 +23,6 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_SITE_FILE = Path("sites.txt")
 DEFAULT_HIDDEN_ROOT = Path("shortest_path_dataset/without_answer")
 DEFAULT_ANSWER_ROOT = Path("shortest_path_dataset/with_answer")
 DEFAULT_OUTPUT_ROOT = Path("opencode-results/shortest_path")
@@ -43,6 +35,7 @@ DEFAULT_PROGRESS_INTERVAL = 1
 
 @dataclass(frozen=True)
 class SamplePaths:
+    split: str
     relative_path: Path
     hidden_path: Path
     answer_path: Path
@@ -65,12 +58,6 @@ class OpenCodeResult:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--site-file",
-        type=Path,
-        default=DEFAULT_SITE_FILE,
-        help=f"站点名称文本文件，默认: {DEFAULT_SITE_FILE}",
-    )
-    parser.add_argument(
         "--hidden-root",
         type=Path,
         default=DEFAULT_HIDDEN_ROOT,
@@ -90,8 +77,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--split",
+        choices=["train", "val", "all"],
         default=DEFAULT_SPLIT,
-        help=f"数据划分，默认: {DEFAULT_SPLIT}",
+        help=f"数据划分；all 会联合查找 train 和 val，默认: {DEFAULT_SPLIT}",
     )
     parser.add_argument(
         "--opencode-command",
@@ -135,18 +123,18 @@ def parse_args() -> argparse.Namespace:
         "--progress-interval",
         type=int,
         default=DEFAULT_PROGRESS_INTERVAL,
-        help=f"每处理多少个站点打印进度，默认: {DEFAULT_PROGRESS_INTERVAL}",
+        help=f"每处理多少个 JSON 打印进度，默认: {DEFAULT_PROGRESS_INTERVAL}",
     )
     parser.add_argument(
         "--limit",
         type=int,
         default=None,
-        help="只处理前 N 个站点，适合小规模联调",
+        help="只处理扫描顺序中的前 N 个 JSON，适合小规模联调",
     )
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="只检查站点匹配并打印提示词，不调用 OpenCode、不写结果",
+        help="只扫描 JSON 并打印提示词，不调用 OpenCode、不写结果",
     )
     parser.add_argument(
         "--indent",
@@ -172,88 +160,41 @@ def write_json(path: Path, data: dict[str, Any], indent: int) -> None:
     )
 
 
-def read_site_names(path: Path) -> list[str]:
-    if not path.is_file():
-        raise FileNotFoundError(f"站点列表文件不存在: {path}")
+def collect_sample_paths(
+    hidden_root: Path,
+    answer_root: Path,
+    output_root: Path,
+    splits: list[str],
+) -> list[SamplePaths]:
+    """按 split 顺序和相对路径字典序收集全部任务样本。"""
 
-    sites: list[str] = []
-    seen: set[str] = set()
-    for line_number, raw_line in enumerate(
-        path.read_text(encoding="utf-8").splitlines(),
-        start=1,
-    ):
-        site = raw_line.strip()
-        if not site or site.startswith("#"):
-            continue
-        if site in seen:
-            print(f"[warning] 第 {line_number} 行站点重复，已忽略: {site}")
-            continue
-        seen.add(site)
-        sites.append(site)
-    return sites
-
-
-def site_aliases(relative_path: Path) -> set[str]:
-    """为一个样本建立文件名、stem 和相对路径形式的查询别名。"""
-
-    relative_posix = relative_path.as_posix()
-    without_suffix = relative_path.with_suffix("").as_posix()
-    return {
-        relative_posix,
-        without_suffix,
-        relative_path.name,
-        relative_path.stem,
-    }
-
-
-def build_site_index(split_root: Path) -> tuple[dict[str, Path], set[str]]:
-    """建立站点别名索引；有歧义的短名称不会被自动匹配。"""
-
-    candidates: dict[str, list[Path]] = {}
-    for json_path in sorted(split_root.rglob("*.json")):
-        if not json_path.is_file():
-            continue
-        relative_path = json_path.relative_to(split_root)
-        for alias in site_aliases(relative_path):
-            candidates.setdefault(alias, []).append(relative_path)
-
-    index: dict[str, Path] = {}
-    ambiguous: set[str] = set()
-    for alias, paths in candidates.items():
-        unique_paths = sorted(set(paths))
-        if len(unique_paths) == 1:
-            index[alias] = unique_paths[0]
-        else:
-            ambiguous.add(alias)
-    return index, ambiguous
-
-
-def resolve_sample_paths(
-    site: str,
-    index: dict[str, Path],
-    ambiguous: set[str],
-    hidden_split_root: Path,
-    answer_split_root: Path,
-    output_split_root: Path,
-) -> SamplePaths:
-    normalized_site = Path(site).as_posix()
-    if normalized_site in ambiguous:
-        raise ValueError(
-            f"站点名称存在多个同名文件，请在 txt 中填写相对路径: {site}"
-        )
-    relative_path = index.get(normalized_site)
-    if relative_path is None:
-        raise FileNotFoundError(f"隐藏答案数据集中找不到站点: {site}")
-
-    answer_path = answer_split_root / relative_path
-    if not answer_path.is_file():
-        raise FileNotFoundError(f"找不到对应标准答案文件: {answer_path}")
-    return SamplePaths(
-        relative_path=relative_path,
-        hidden_path=hidden_split_root / relative_path,
-        answer_path=answer_path,
-        output_path=output_split_root / relative_path,
-    )
+    samples: list[SamplePaths] = []
+    for split in splits:
+        hidden_split_root = hidden_root / split
+        answer_split_root = answer_root / split
+        if not hidden_split_root.is_dir():
+            raise FileNotFoundError(
+                f"隐藏答案数据目录不存在: {hidden_split_root}"
+            )
+        if not answer_split_root.is_dir():
+            raise FileNotFoundError(
+                f"标准答案数据目录不存在: {answer_split_root}"
+            )
+        for hidden_path in sorted(hidden_split_root.rglob("*.json")):
+            if not hidden_path.is_file():
+                continue
+            relative_path = hidden_path.relative_to(hidden_split_root)
+            answer_path = answer_split_root / relative_path
+            samples.append(
+                SamplePaths(
+                    split=split,
+                    relative_path=relative_path,
+                    hidden_path=hidden_path,
+                    answer_path=answer_path,
+                    output_path=output_root / split / relative_path,
+                )
+            )
+    return samples
 
 
 def build_prompt(site: str, sample: dict[str, Any]) -> str:
@@ -594,22 +535,19 @@ def main() -> None:
     if args.limit is not None and args.limit < 0:
         raise ValueError("--limit 不能小于 0")
 
-    sites = read_site_names(args.site_file)
+    splits = ["train", "val"] if args.split == "all" else [args.split]
+    samples = collect_sample_paths(
+        args.hidden_root,
+        args.answer_root,
+        args.output_root,
+        splits,
+    )
     if args.limit is not None:
-        sites = sites[: args.limit]
-
-    hidden_split_root = args.hidden_root / args.split
-    answer_split_root = args.answer_root / args.split
-    output_split_root = args.output_root / args.split
-    if not hidden_split_root.is_dir():
-        raise FileNotFoundError(f"隐藏答案数据目录不存在: {hidden_split_root}")
-    if not answer_split_root.is_dir():
-        raise FileNotFoundError(f"标准答案数据目录不存在: {answer_split_root}")
-
-    index, ambiguous = build_site_index(hidden_split_root)
+        samples = samples[: args.limit]
+    if not samples:
+        raise FileNotFoundError("没有找到需要推理的 without_answer JSON")
     print(
-        f"[{args.split}] sites={len(sites)}, samples={len(set(index.values()))}, "
-        f"ambiguous_aliases={len(ambiguous)}"
+        f"[{args.split}] samples={len(samples)}, splits={','.join(splits)}"
     )
 
     if not args.dry_run:
@@ -629,28 +567,24 @@ def main() -> None:
 
     succeeded = 0
     failed = 0
-    for index_number, site in enumerate(sites, start=1):
+    for index_number, paths in enumerate(samples, start=1):
+        site = paths.relative_path.name
         try:
-            paths = resolve_sample_paths(
-                site=site,
-                index=index,
-                ambiguous=ambiguous,
-                hidden_split_root=hidden_split_root,
-                answer_split_root=answer_split_root,
-                output_split_root=output_split_root,
-            )
             hidden_sample = load_json_object(paths.hidden_path)
             prompt = build_prompt(site, hidden_sample)
 
             if args.dry_run:
-                print(f"\n===== {site} -> {paths.relative_path} =====\n{prompt}\n")
+                print(
+                    f"\n===== {paths.split}/{paths.relative_path} =====\n"
+                    f"{prompt}\n"
+                )
                 continue
 
             result = invoke_opencode(args, prompt)
             answer_document = load_json_object(paths.answer_path)
             stdout_path, stderr_path = write_raw_outputs(
                 args.output_root,
-                args.split,
+                paths.split,
                 paths.relative_path,
                 result,
             )
@@ -671,6 +605,7 @@ def main() -> None:
                     error_path,
                     {
                         "site": site,
+                        "split": paths.split,
                         "file": str(paths.hidden_path),
                         "output_file": str(paths.output_path),
                         "error": result.error,
@@ -683,24 +618,26 @@ def main() -> None:
                     error_path,
                     {
                         "site": site,
+                        "split": paths.split,
+                        "file": str(paths.hidden_path),
                         "error": f"sample-processing-error: {exc}",
                     },
                 )
-            print(f"[error] site={site}: {exc}")
+            print(f"[error] split={paths.split}, site={site}: {exc}")
 
         if (
             args.progress_interval > 0
             and index_number % args.progress_interval == 0
         ):
             print(
-                f"[{args.split}] processed={index_number}/{len(sites)}, "
+                f"[{args.split}] processed={index_number}/{len(samples)}, "
                 f"succeeded={succeeded}, failed={failed}"
             )
 
     summary = {
         "split": args.split,
-        "site_file": str(args.site_file),
-        "requested_sites": len(sites),
+        "searched_splits": splits,
+        "total_files": len(samples),
         "succeeded": succeeded,
         "failed": failed,
         "dry_run": args.dry_run,
