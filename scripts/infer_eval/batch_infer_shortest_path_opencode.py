@@ -132,6 +132,11 @@ def parse_args() -> argparse.Namespace:
         help="只处理扫描顺序中的前 N 个 JSON，适合小规模联调",
     )
     parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="断点续推：跳过已有成功结果，重新处理失败或损坏的结果",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="只扫描 JSON 并打印提示词，不调用 OpenCode、不写结果",
@@ -150,6 +155,23 @@ def load_json_object(path: Path) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise ValueError(f"JSON 顶层必须是对象，实际为 {type(data).__name__}")
     return data
+
+
+def has_successful_result(path: Path, run_field: str) -> bool:
+    """仅将状态成功且包含结构化模型回答的结果视为已完成。"""
+
+    if not path.is_file():
+        return False
+    try:
+        document = load_json_object(path)
+    except Exception:  # noqa: BLE001 - 损坏结果需要在续推时覆盖。
+        return False
+    run_info = document.get(run_field)
+    return bool(
+        isinstance(run_info, dict)
+        and run_info.get("success") is True
+        and isinstance(document.get("model-output"), dict)
+    )
 
 
 def write_json(path: Path, data: dict[str, Any], indent: int) -> None:
@@ -407,6 +429,16 @@ def build_opencode_command(args: argparse.Namespace, prompt: str) -> list[str]:
     return command
 
 
+def subprocess_output_text(value: str | bytes | None) -> str:
+    """统一 subprocess 正常返回和超时异常中的文本类型。"""
+
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
+
+
 def invoke_opencode(args: argparse.Namespace, prompt: str) -> OpenCodeResult:
     total_attempts = max(1, args.retries + 1)
     started_at = time.monotonic()
@@ -430,18 +462,18 @@ def invoke_opencode(args: argparse.Namespace, prompt: str) -> OpenCodeResult:
                 timeout=args.timeout_seconds,
                 check=False,
             )
-            last_stdout = completed.stdout
-            last_stderr = completed.stderr
+            last_stdout = subprocess_output_text(completed.stdout)
+            last_stderr = subprocess_output_text(completed.stderr)
             last_return_code = completed.returncode
             if completed.returncode != 0:
                 last_error = (
                     f"opencode-exit-{completed.returncode}: "
-                    f"{completed.stderr.strip() or '没有 stderr'}"
+                    f"{last_stderr.strip() or '没有 stderr'}"
                 )
                 continue
 
             try:
-                answer, last_session_id = extract_answer_and_session(completed.stdout)
+                answer, last_session_id = extract_answer_and_session(last_stdout)
             except ValueError as exc:
                 last_error = f"opencode-answer-parse-error: {exc}"
                 continue
@@ -458,8 +490,8 @@ def invoke_opencode(args: argparse.Namespace, prompt: str) -> OpenCodeResult:
                 stderr=last_stderr,
             )
         except subprocess.TimeoutExpired as exc:
-            last_stdout = exc.stdout or ""
-            last_stderr = exc.stderr or ""
+            last_stdout = subprocess_output_text(exc.stdout)
+            last_stderr = subprocess_output_text(exc.stderr)
             last_error = f"opencode-timeout-after-{args.timeout_seconds:g}-seconds"
         except FileNotFoundError:
             last_error = f"opencode-command-not-found: {args.opencode_command}"
@@ -567,8 +599,24 @@ def main() -> None:
 
     succeeded = 0
     failed = 0
+    skipped = 0
     for index_number, paths in enumerate(samples, start=1):
         site = paths.relative_path.name
+        if args.resume and has_successful_result(
+            paths.output_path,
+            "opencode-run",
+        ):
+            skipped += 1
+            if (
+                args.progress_interval > 0
+                and index_number % args.progress_interval == 0
+            ):
+                print(
+                    f"[{args.split}] processed={index_number}/{len(samples)}, "
+                    f"succeeded={succeeded}, failed={failed}, skipped={skipped}"
+                )
+            continue
+
         try:
             hidden_sample = load_json_object(paths.hidden_path)
             prompt = build_prompt(site, hidden_sample)
@@ -631,7 +679,7 @@ def main() -> None:
         ):
             print(
                 f"[{args.split}] processed={index_number}/{len(samples)}, "
-                f"succeeded={succeeded}, failed={failed}"
+                f"succeeded={succeeded}, failed={failed}, skipped={skipped}"
             )
 
     summary = {
@@ -640,6 +688,8 @@ def main() -> None:
         "total_files": len(samples),
         "succeeded": succeeded,
         "failed": failed,
+        "skipped": skipped,
+        "resume": args.resume,
         "dry_run": args.dry_run,
         "output_root": str(args.output_root),
     }

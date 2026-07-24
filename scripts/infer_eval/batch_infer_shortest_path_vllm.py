@@ -141,10 +141,16 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="开启模型思考模式；默认关闭",
     )
-    parser.add_argument(
+    existing_group = parser.add_mutually_exclusive_group()
+    existing_group.add_argument(
         "--skip-existing",
         action="store_true",
-        help="结果文件已存在时跳过；默认覆盖",
+        help="结果文件只要存在就跳过，不检查此前推理是否成功",
+    )
+    existing_group.add_argument(
+        "--resume",
+        action="store_true",
+        help="断点续推：跳过已有成功结果，重新处理失败或损坏的结果",
     )
     parser.add_argument("--indent", type=int, default=2)
     args = parser.parse_args()
@@ -181,6 +187,23 @@ def load_json_object(path: Path) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise ValueError(f"JSON 顶层必须是对象，实际为 {type(data).__name__}")
     return data
+
+
+def has_successful_result(path: Path, run_field: str) -> bool:
+    """仅将状态成功且包含结构化模型回答的结果视为已完成。"""
+
+    if not path.is_file():
+        return False
+    try:
+        document = load_json_object(path)
+    except Exception:  # noqa: BLE001 - 损坏结果需要在续推时覆盖。
+        return False
+    run_info = document.get(run_field)
+    return bool(
+        isinstance(run_info, dict)
+        and run_info.get("success") is True
+        and isinstance(document.get("model-output"), dict)
+    )
 
 
 def write_json_atomic(path: Path, data: dict[str, Any], indent: int) -> None:
@@ -394,7 +417,12 @@ def main() -> None:
         output_path = output_root / split / relative_path
         by_split[split]["input_files"] += 1
 
-        if args.skip_existing and output_path.is_file():
+        should_skip = (
+            args.skip_existing and output_path.is_file()
+        ) or (
+            args.resume and has_successful_result(output_path, "vllm-run")
+        )
+        if should_skip:
             skipped += 1
             by_split[split]["skipped"] += 1
         else:
@@ -479,6 +507,8 @@ def main() -> None:
         "model": args.model,
         "base_url": args.base_url,
         "thinking_enabled": args.enable_thinking,
+        "resume": args.resume,
+        "skip_existing": args.skip_existing,
         "context_mode": "full_without_answer_json",
         "total_files": len(sample_items),
         "succeeded": succeeded,
