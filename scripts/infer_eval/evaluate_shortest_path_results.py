@@ -11,6 +11,12 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from task_evaluation_common import (
+    DEFAULT_SWANLAB_COLOR_SEED,
+    deterministic_experiment_color,
+    experiment_color_key,
+)
+
 
 DEFAULT_RESULT_PATH = Path("vllm-results/shortest_path")
 DEFAULT_OUTPUT_DIR = Path("vllm-results/shortest_path-evaluation")
@@ -88,6 +94,21 @@ def parse_args() -> argparse.Namespace:
         "--swanlab-mode",
         default=DEFAULT_SWANLAB_MODE,
         help="SwanLab 运行模式，默认: %(default)s",
+    )
+    parser.add_argument(
+        "--swanlab-color-seed",
+        type=int,
+        default=DEFAULT_SWANLAB_COLOR_SEED,
+        help=(
+            "根据实验名生成确定性颜色的固定随机种子，默认: %(default)s"
+        ),
+    )
+    parser.add_argument(
+        "--swanlab-color-key",
+        default=None,
+        help=(
+            "实验颜色区分键；默认使用 result_path，不同模型可显式传入不同键"
+        ),
     )
     parser.add_argument(
         "--disable-swanlab",
@@ -418,16 +439,26 @@ def init_swanlab(args: argparse.Namespace, result_path: Path) -> Any | None:
     if args.disable_swanlab:
         return None
     swanlab = import_swanlab()
+    color_key = experiment_color_key(args, result_path)
+    experiment_color = deterministic_experiment_color(
+        args.swanlab_experiment,
+        args.swanlab_color_seed,
+        color_key,
+    )
     swanlab.init(
         project=args.swanlab_project,
         experiment_name=args.swanlab_experiment,
         mode=args.swanlab_mode,
+        color=experiment_color,
         config={
             "script": Path(sys.argv[0]).name,
             "result_path": str(result_path),
             "split": args.split,
             "aggregation": "running macro average",
             "metrics": list(METRIC_NAMES),
+            "swanlab_experiment_color": experiment_color,
+            "swanlab_color_seed": args.swanlab_color_seed,
+            "swanlab_color_key": color_key,
         },
     )
     return swanlab
@@ -595,6 +626,13 @@ def main() -> None:
         "sample_count": sample_count,
         "successful_model_returns": successful_model_returns,
         "failed_model_returns": sample_count - successful_model_returns,
+        "swanlab_experiment_color": deterministic_experiment_color(
+            args.swanlab_experiment,
+            args.swanlab_color_seed,
+            experiment_color_key(args, result_path),
+        ),
+        "swanlab_color_seed": args.swanlab_color_seed,
+        "swanlab_color_key": experiment_color_key(args, result_path),
         "metrics": aggregate_metrics,
     }
 

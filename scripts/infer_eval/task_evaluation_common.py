@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import argparse
+import colorsys
 import csv
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -29,6 +31,7 @@ PATH_DETAIL_NAMES = (
     "false_positive",
     "false_negative",
 )
+DEFAULT_SWANLAB_COLOR_SEED = 20260727
 
 
 def add_evaluation_arguments(
@@ -81,6 +84,21 @@ def add_evaluation_arguments(
         "--swanlab-mode",
         default="cloud",
         help="SwanLab 运行模式，默认: %(default)s",
+    )
+    parser.add_argument(
+        "--swanlab-color-seed",
+        type=int,
+        default=DEFAULT_SWANLAB_COLOR_SEED,
+        help=(
+            "根据实验名生成确定性颜色的固定随机种子，默认: %(default)s"
+        ),
+    )
+    parser.add_argument(
+        "--swanlab-color-key",
+        default=None,
+        help=(
+            "实验颜色区分键；默认使用 result_path，不同模型可显式传入不同键"
+        ),
     )
     parser.add_argument(
         "--disable-swanlab",
@@ -229,6 +247,37 @@ def import_swanlab() -> Any:
     return swanlab
 
 
+def deterministic_experiment_color(
+    experiment_name: str,
+    seed: int,
+    color_key: str = "",
+) -> str:
+    """将固定种子、实验名和区分键稳定映射为十六进制颜色。"""
+
+    digest = hashlib.sha256(
+        f"{seed}:{experiment_name}:{color_key}".encode("utf-8")
+    ).digest()
+    hue = int.from_bytes(digest[:8], "big") / float(1 << 64)
+    saturation = 0.62 + digest[8] / 255 * 0.18
+    lightness = 0.46 + digest[9] / 255 * 0.10
+    red, green, blue = colorsys.hls_to_rgb(hue, lightness, saturation)
+    return "#{:02X}{:02X}{:02X}".format(
+        round(red * 255),
+        round(green * 255),
+        round(blue * 255),
+    )
+
+
+def experiment_color_key(
+    args: argparse.Namespace,
+    result_path: Path,
+) -> str:
+    explicit_key = getattr(args, "swanlab_color_key", None)
+    if isinstance(explicit_key, str) and explicit_key:
+        return explicit_key
+    return str(result_path.resolve())
+
+
 def init_swanlab(
     args: argparse.Namespace,
     result_path: Path,
@@ -238,10 +287,17 @@ def init_swanlab(
     if args.disable_swanlab:
         return None
     swanlab = import_swanlab()
+    color_key = experiment_color_key(args, result_path)
+    experiment_color = deterministic_experiment_color(
+        args.swanlab_experiment,
+        args.swanlab_color_seed,
+        color_key,
+    )
     swanlab.init(
         project=args.swanlab_project,
         experiment_name=args.swanlab_experiment,
         mode=args.swanlab_mode,
+        color=experiment_color,
         config={
             "script": Path(sys.argv[0]).name,
             "task": task_name,
@@ -249,6 +305,9 @@ def init_swanlab(
             "split": args.split,
             "aggregation": "running macro average",
             "metrics": list(metric_names),
+            "swanlab_experiment_color": experiment_color,
+            "swanlab_color_seed": args.swanlab_color_seed,
+            "swanlab_color_key": color_key,
         },
     )
     return swanlab
@@ -447,6 +506,13 @@ def run_evaluation(
         "sample_count": sample_count,
         "successful_model_returns": successful_model_returns,
         "failed_model_returns": sample_count - successful_model_returns,
+        "swanlab_experiment_color": deterministic_experiment_color(
+            args.swanlab_experiment,
+            args.swanlab_color_seed,
+            experiment_color_key(args, result_path),
+        ),
+        "swanlab_color_seed": args.swanlab_color_seed,
+        "swanlab_color_key": experiment_color_key(args, result_path),
         "metrics": aggregate_metrics,
     }
 
