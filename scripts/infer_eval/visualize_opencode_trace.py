@@ -50,6 +50,9 @@ class TraceSummary:
     log_count: int
     final_answer: dict[str, Any] | None
     final_answer_error: str
+    reference_answer: Any
+    reference_answer_error: str
+    result_path: Path | None
     stderr_text: str
 
     @property
@@ -75,6 +78,15 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=DEFAULT_OUTPUT_PATH,
         help="单文件模式可指定 HTML 文件；批量模式指定输出目录",
+    )
+    parser.add_argument(
+        "--result-root",
+        type=Path,
+        default=None,
+        help=(
+            "包含推理结果 train/val 目录的根目录；默认根据 `_raw` "
+            "所在位置自动推断"
+        ),
     )
     parser.add_argument(
         "--title",
@@ -388,6 +400,61 @@ def companion_stderr_path(stdout_path: Path) -> Path:
     return stdout_path.with_suffix(stdout_path.suffix + ".stderr.txt")
 
 
+def result_json_name(stdout_path: Path) -> str:
+    suffix = ".stdout.txt"
+    if stdout_path.name.endswith(suffix):
+        return stdout_path.name[: -len(suffix)]
+    return stdout_path.name
+
+
+def infer_result_path(
+    stdout_path: Path,
+    result_root: Path | None,
+    raw_input_root: Path,
+) -> Path | None:
+    """定位与 raw stdout 对应的、同时包含标准答案的推理结果 JSON。"""
+
+    if result_root is not None:
+        if raw_input_root.is_dir():
+            relative_path = stdout_path.relative_to(raw_input_root)
+        else:
+            raw_parent = next(
+                (parent for parent in stdout_path.parents if parent.name == "_raw"),
+                None,
+            )
+            relative_path = (
+                stdout_path.relative_to(raw_parent)
+                if raw_parent is not None
+                else Path(stdout_path.name)
+            )
+        return result_root / relative_path.with_name(result_json_name(stdout_path))
+
+    for parent in stdout_path.parents:
+        if parent.name != "_raw":
+            continue
+        relative_path = stdout_path.relative_to(parent)
+        return parent.parent / relative_path.with_name(result_json_name(stdout_path))
+    return None
+
+
+def load_reference_answer(
+    result_path: Path | None,
+) -> tuple[Any, str]:
+    if result_path is None:
+        return None, "无法自动定位结果 JSON；请使用 --result-root 指定结果目录"
+    if not result_path.is_file():
+        return None, f"未找到对应结果 JSON：{result_path}"
+    try:
+        document = json.loads(result_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        return None, f"结果 JSON 读取失败：{type(error).__name__}: {error}"
+    if not isinstance(document, dict):
+        return None, "结果 JSON 顶层不是对象"
+    if "task_answer" not in document:
+        return None, "结果 JSON 中不存在 task_answer"
+    return document["task_answer"], ""
+
+
 def escaped(value: Any) -> str:
     return html.escape(str(value), quote=True)
 
@@ -456,12 +523,20 @@ def detail_page_html(
         for category, label in CATEGORY_LABELS.items()
         if category_counts[category]
     )
-    answer_html = (
+    model_answer_html = (
         escaped(json.dumps(summary.final_answer, ensure_ascii=False, indent=2))
         if summary.final_answer is not None
         else escaped(summary.final_answer_error)
     )
-    answer_class = "success" if summary.final_answer is not None else "warning"
+    model_answer_class = "success" if summary.final_answer is not None else "warning"
+    reference_answer_html = (
+        escaped(json.dumps(summary.reference_answer, ensure_ascii=False, indent=2))
+        if not summary.reference_answer_error
+        else escaped(summary.reference_answer_error)
+    )
+    reference_answer_class = (
+        "success" if not summary.reference_answer_error else "warning"
+    )
     stderr_section = ""
     if summary.stderr_text.strip():
         stderr_section = f"""
@@ -641,6 +716,7 @@ pre {{
   border-radius: 6px;
   padding: 16px;
 }}
+.trace-note {{ grid-column: 1 / -1; }}
 h2 {{ margin: 0 0 12px; font-size: 16px; }}
 .answer.success h2 {{ color: var(--green); }}
 .answer.warning h2 {{ color: var(--amber); }}
@@ -683,15 +759,20 @@ h2 {{ margin: 0 0 12px; font-size: 16px; }}
   </section>
 </main>
 <div class="bottom-grid">
-  <section class="answer {answer_class}">
-    <h2>最终答案</h2>
-    <pre>{answer_html}</pre>
+  <section class="answer {reference_answer_class}">
+    <h2>输出</h2>
+    <pre>{reference_answer_html}</pre>
   </section>
-  <section>
+  <section class="answer {model_answer_class}">
+    <h2>模型答案</h2>
+    <pre>{model_answer_html}</pre>
+  </section>
+  <section class="trace-note">
     <h2>轨迹说明</h2>
     <p>本页面展示 OpenCode <code>--format json</code> 写入 stdout 的事件流。
     它包含 Agent 文本、工具调用、工具结果和状态事件，但不代表模型未公开的内部思维过程。</p>
-    <p>未知事件和普通日志会保留，避免因 OpenCode 版本差异丢失诊断信息。</p>
+    <p>“输出”读取对应推理结果 JSON 的 <code>task_answer</code>；
+    “模型答案”来自 stdout 事件流中提取的最终 JSON。未知事件和普通日志会保留。</p>
   </section>
 </div>
 {stderr_section}
@@ -740,11 +821,15 @@ def analyze_trace(
     output_path: Path,
     title: str,
     max_detail_chars: int,
+    result_root: Path | None,
+    raw_input_root: Path,
 ) -> TraceSummary:
     raw_text = stdout_path.read_text(encoding="utf-8", errors="replace")
     raw_values = parse_json_stream(raw_text)
     events = build_events(raw_values, max_detail_chars)
     final_answer, final_answer_error = extract_final_answer(raw_values)
+    result_path = infer_result_path(stdout_path, result_root, raw_input_root)
+    reference_answer, reference_answer_error = load_reference_answer(result_path)
     stderr_path = companion_stderr_path(stdout_path)
     stderr_text = (
         stderr_path.read_text(encoding="utf-8", errors="replace")
@@ -762,6 +847,9 @@ def analyze_trace(
         log_count=sum(event.category == "log" for event in events),
         final_answer=final_answer,
         final_answer_error=final_answer_error,
+        reference_answer=reference_answer,
+        reference_answer_error=reference_answer_error,
+        result_path=result_path,
         stderr_text=stderr_text,
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -917,6 +1005,7 @@ def main() -> None:
     args = parse_args()
     input_path = args.input_path.resolve()
     output = args.output.resolve()
+    result_root = args.result_root.resolve() if args.result_root is not None else None
     stdout_files = collect_stdout_files(input_path)
     if not stdout_files:
         raise FileNotFoundError(f"没有找到 *.stdout.txt: {input_path}")
@@ -930,6 +1019,8 @@ def main() -> None:
             output_path,
             args.title,
             args.max_detail_chars,
+            result_root,
+            input_path,
         )
         print(f"已生成: {summary.output_path}")
         return
@@ -944,6 +1035,8 @@ def main() -> None:
             output / relative_output,
             args.title,
             args.max_detail_chars,
+            result_root,
+            input_path,
         )
         # index.html 中链接必须使用相对于输出目录的路径。
         summary.output_path = relative_output
