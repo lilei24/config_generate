@@ -12,6 +12,7 @@ opencode-results/
 opencode-harness-workspace/
 vllm-results/
 vlan-llm-analysis/
+network-business-analysis/
 QA/
 QA_token_analysis/
 __pycache__/
