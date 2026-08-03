@@ -7,10 +7,21 @@ import argparse
 import csv
 import html
 import json
+import sys
 import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from topology_visualizer.generate_topology_visualizations import (  # noqa: E402
+    graph_page,
+    parse_graph,
+)
 
 
 DEFAULT_DATASET_ROOT = Path("datasets")
@@ -25,6 +36,8 @@ DEFAULT_RETRIES = 1
 DEFAULT_RETRY_WAIT_SECONDS = 5.0
 DEFAULT_WAIT_SECONDS = 0.0
 DEFAULT_PROGRESS_INTERVAL = 1
+DEFAULT_MAX_CONFIG_INTERPRETATIONS = 20
+REPORT_VERSION = 2
 
 SUMMARY_FILE = "analysis_summary.json"
 FAILURE_FILE = "analysis_failures.csv"
@@ -91,11 +104,27 @@ USER_PROMPT_TEMPLATE = """请分析下面的完整站点网络拓扑，帮助用
       "evidence": ["节点ID或设备组及配置Key"]
     }}
   ],
+  "config_interpretations": [
+    {{
+      "config_ref": "必须来自配置索引的引用",
+      "title": "配置的通俗名称",
+      "interpretation": "严格基于配置字段的业务理解",
+      "business_impact": "该配置可能影响的网络行为",
+      "certainty": "fact或inference",
+      "unknowns": ["仅凭当前配置无法确认的信息"]
+    }}
+  ],
   "unknowns": ["当前 JSON 无法确认的信息"],
   "plain_language_conclusion": "面向非网络专业人员的简明总结"
 }}
 
 不要仅凭设备名称推断链路，不要仅凭相同 VLAN ID 断定业务连通，也不要把配置 Key 的字面含义当作已经验证的业务事实。
+
+请从下面的配置索引中选择最多 {max_config_interpretations} 段具有代表性或业务意义的配置进行逐段解读。
+config_ref 必须逐字使用索引中已有的值。配置索引只提供位置，具体字段和值请在完整拓扑 JSON 中查找。
+
+【配置索引】
+{config_catalog_json}
 
 【完整站点网络拓扑 JSON】
 {topology_json}
@@ -107,6 +136,7 @@ LIST_SECTIONS = (
     "business_observations",
     "risks",
     "vlan_and_config",
+    "config_interpretations",
     "unknowns",
 )
 
@@ -171,6 +201,12 @@ def parse_args() -> argparse.Namespace:
         help="只处理排序后的前 N 个文件，用于小规模测试",
     )
     parser.add_argument(
+        "--max-config-interpretations",
+        type=int,
+        default=DEFAULT_MAX_CONFIG_INTERPRETATIONS,
+        help="每个站点最多要求模型解读的代表性配置数，默认: %(default)s",
+    )
+    parser.add_argument(
         "--enable-thinking",
         action="store_true",
         help="开启模型思考模式；默认关闭",
@@ -193,6 +229,8 @@ def parse_args() -> argparse.Namespace:
         parser.error("--progress-interval 不能小于 0")
     if args.limit is not None and args.limit < 0:
         parser.error("--limit 不能小于 0")
+    if args.max_config_interpretations < 0:
+        parser.error("--max-config-interpretations 不能小于 0")
     return args
 
 
@@ -223,8 +261,102 @@ def compact_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
-def build_user_prompt(graph: dict[str, Any]) -> str:
-    return USER_PROMPT_TEMPLATE.format(topology_json=compact_json(graph))
+def config_objects(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, dict)]
+    if isinstance(value, dict):
+        return [value]
+    return []
+
+
+def device_name(node: dict[str, Any]) -> str:
+    device = node.get("devices")
+    if not isinstance(device, dict):
+        device = node.get("device")
+    name = device.get("NAME") if isinstance(device, dict) else None
+    return str(name) if name is not None and str(name).strip() else ""
+
+
+def extract_config_entries(graph: dict[str, Any]) -> list[dict[str, Any]]:
+    """按配置顶层 Key 提取真实配置，并生成稳定的 JSON 路径引用。"""
+
+    entries: list[dict[str, Any]] = []
+    nodes = graph.get("nodes")
+    if isinstance(nodes, list):
+        for node_index, node in enumerate(nodes):
+            if not isinstance(node, dict):
+                continue
+            node_id = str(node.get("id", f"index-{node_index}"))
+            name = device_name(node)
+            for field_name in ("configs", "config"):
+                raw_configs = config_objects(node.get(field_name))
+                for config_index, config in enumerate(raw_configs):
+                    for top_key, value in config.items():
+                        config_ref = (
+                            f"nodes[{node_index}].{field_name}[{config_index}].{top_key}"
+                        )
+                        entries.append(
+                            {
+                                "config_ref": config_ref,
+                                "scope": "node",
+                                "owner_id": node_id,
+                                "owner_name": name,
+                                "top_level_key": str(top_key),
+                                "configuration": {str(top_key): value},
+                            }
+                        )
+
+    groups = graph.get("deviceGroups")
+    if isinstance(groups, list):
+        for group_index, group in enumerate(groups):
+            if not isinstance(group, dict):
+                continue
+            group_data = group.get("deviceGroup")
+            if not isinstance(group_data, dict):
+                group_data = {}
+            group_name = str(group_data.get("NAME", f"index-{group_index}"))
+            raw_configs = config_objects(group.get("configs"))
+            for config_index, config in enumerate(raw_configs):
+                for top_key, value in config.items():
+                    config_ref = (
+                        f"deviceGroups[{group_index}].configs[{config_index}].{top_key}"
+                    )
+                    entries.append(
+                        {
+                            "config_ref": config_ref,
+                            "scope": "deviceGroup",
+                            "owner_id": group_name,
+                            "owner_name": group_name,
+                            "top_level_key": str(top_key),
+                            "configuration": {str(top_key): value},
+                        }
+                    )
+    return entries
+
+
+def config_catalog(entries: list[dict[str, Any]]) -> list[dict[str, str]]:
+    return [
+        {
+            "config_ref": str(entry["config_ref"]),
+            "scope": str(entry["scope"]),
+            "owner_id": str(entry["owner_id"]),
+            "owner_name": str(entry["owner_name"]),
+            "top_level_key": str(entry["top_level_key"]),
+        }
+        for entry in entries
+    ]
+
+
+def build_user_prompt(
+    graph: dict[str, Any],
+    entries: list[dict[str, Any]],
+    max_config_interpretations: int,
+) -> str:
+    return USER_PROMPT_TEMPLATE.format(
+        topology_json=compact_json(graph),
+        config_catalog_json=compact_json(config_catalog(entries)),
+        max_config_interpretations=max_config_interpretations,
+    )
 
 
 def strip_code_fence(text: str) -> str:
@@ -276,7 +408,11 @@ def require_object_list(data: dict[str, Any], key: str) -> list[dict[str, Any]]:
     return value
 
 
-def validate_analysis(data: dict[str, Any]) -> dict[str, Any]:
+def validate_analysis(
+    data: dict[str, Any],
+    available_config_refs: set[str],
+    max_config_interpretations: int,
+) -> dict[str, Any]:
     require_string(data, "site_summary")
     require_string(data, "plain_language_conclusion")
     for key in LIST_SECTIONS:
@@ -307,6 +443,31 @@ def validate_analysis(data: dict[str, Any]) -> dict[str, Any]:
         require_string(item, "title")
         require_string(item, "description")
         require_string_list(item.get("evidence"), f"vlan_and_config[{index}].evidence")
+    interpretations = require_object_list(data, "config_interpretations")
+    if len(interpretations) > max_config_interpretations:
+        raise ValueError(
+            "config_interpretations 数量超过限制："
+            f"{len(interpretations)} > {max_config_interpretations}"
+        )
+    seen_refs: set[str] = set()
+    for index, item in enumerate(interpretations):
+        config_ref = require_string(item, "config_ref")
+        if config_ref not in available_config_refs:
+            raise ValueError(
+                f"config_interpretations[{index}].config_ref 不存在: {config_ref}"
+            )
+        if config_ref in seen_refs:
+            raise ValueError(f"config_ref 重复: {config_ref}")
+        seen_refs.add(config_ref)
+        require_string(item, "title")
+        require_string(item, "interpretation")
+        require_string(item, "business_impact")
+        if require_string(item, "certainty") not in {"fact", "inference"}:
+            raise ValueError(f"config_interpretations[{index}].certainty 非法")
+        require_string_list(
+            item.get("unknowns"),
+            f"config_interpretations[{index}].unknowns",
+        )
     require_string_list(data.get("unknowns"), "unknowns")
     return data
 
@@ -315,6 +476,7 @@ def request_analysis(
     client: Any,
     args: argparse.Namespace,
     user_prompt: str,
+    available_config_refs: set[str],
 ) -> tuple[dict[str, Any], str, int]:
     total_attempts = args.retries + 1
     last_error: Exception | None = None
@@ -339,7 +501,11 @@ def request_analysis(
             if not isinstance(content, str) or not content.strip():
                 raise ValueError("模型返回内容为空")
             last_output = content
-            analysis = validate_analysis(parse_json_object(content))
+            analysis = validate_analysis(
+                parse_json_object(content),
+                available_config_refs,
+                args.max_config_interpretations,
+            )
             return analysis, content, attempt
         except Exception as error:  # noqa: BLE001 - 请求和格式错误均允许重试。
             last_error = error
@@ -360,6 +526,28 @@ def graph_statistics(graph: dict[str, Any]) -> dict[str, int]:
         "device_group_count": len(graph.get("deviceGroups")) if isinstance(graph.get("deviceGroups"), list) else 0,
         "input_characters": len(compact_json(graph)),
     }
+
+
+def resolve_config_explanations(
+    entries: list[dict[str, Any]],
+    analysis: dict[str, Any],
+) -> list[dict[str, Any]]:
+    entry_by_ref = {str(entry["config_ref"]): entry for entry in entries}
+    resolved: list[dict[str, Any]] = []
+    for interpretation in analysis.get("config_interpretations", []):
+        config_ref = interpretation["config_ref"]
+        entry = entry_by_ref[config_ref]
+        resolved.append(
+            {
+                **entry,
+                "title": interpretation["title"],
+                "interpretation": interpretation["interpretation"],
+                "business_impact": interpretation["business_impact"],
+                "certainty": interpretation["certainty"],
+                "unknowns": interpretation["unknowns"],
+            }
+        )
+    return resolved
 
 
 def write_json_atomic(path: Path, data: dict[str, Any]) -> None:
@@ -435,11 +623,76 @@ def paths_html(paths: Any) -> str:
     return "".join(parts)
 
 
+def config_explanations_html(items: Any) -> str:
+    if not isinstance(items, list) or not items:
+        return '<p class="empty">当前站点没有模型选中的代表性配置</p>'
+    parts: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        certainty = item.get("certainty", "fact")
+        certainty_label = "明确事实" if certainty == "fact" else "合理推断"
+        owner = item.get("owner_name") or item.get("owner_id") or "未知对象"
+        scope_label = "节点配置" if item.get("scope") == "node" else "设备组配置"
+        raw_config = json.dumps(
+            item.get("configuration"),
+            ensure_ascii=False,
+            indent=2,
+        )
+        unknowns = item.get("unknowns")
+        unknown_html = (
+            "".join(f"<li>{esc(value)}</li>" for value in unknowns)
+            if isinstance(unknowns, list) and unknowns
+            else "<li>模型未列出信息缺口</li>"
+        )
+        parts.append(
+            f"""<article class="config-item">
+<div class="config-header">
+  <div><strong>{esc(item.get('title', item.get('top_level_key', '配置')))}</strong>
+  <span>{esc(scope_label)} · {esc(owner)}</span></div>
+  <span class="badge {esc(certainty)}">{certainty_label}</span>
+</div>
+<div class="config-ref"><code>{esc(item.get('config_ref', ''))}</code></div>
+<div class="config-columns">
+  <div class="config-source"><h3>原始配置</h3><pre>{esc(raw_config)}</pre></div>
+  <div class="config-understanding">
+    <h3>LLM 业务理解</h3>
+    <p>{esc(item.get('interpretation', ''))}</p>
+    <h4>可能影响</h4><p>{esc(item.get('business_impact', ''))}</p>
+    <h4>信息边界</h4><ul>{unknown_html}</ul>
+  </div>
+</div></article>"""
+        )
+    return "".join(parts)
+
+
 def report_html(result: dict[str, Any], source_path: Path) -> str:
     analysis = result.get("model-output")
+    topology = result.get("topology-visualization")
+    topology_html = ""
+    if isinstance(topology, dict) and topology.get("status") is True:
+        topology_file = Path(str(topology["html_file"])).name
+        topology_html = f"""<section class="topology-section">
+<div class="section-heading"><h2>交互式拓扑图</h2>
+<a href="{quote(topology_file)}" target="_blank" rel="noopener">独立打开</a></div>
+<iframe src="{quote(topology_file)}" title="交互式网络拓扑图" loading="lazy"></iframe>
+</section>"""
+    else:
+        topology_error = (
+            topology.get("error")
+            if isinstance(topology, dict)
+            else "未生成拓扑可视化"
+        )
+        topology_html = f"""<section class="topology-section">
+<h2>交互式拓扑图</h2><p class="error-text">{esc(topology_error)}</p></section>"""
+
     if not isinstance(analysis, dict):
         error = result.get("error") or "没有可用分析结果"
-        body = f'<section class="error-panel"><h2>分析失败</h2><pre>{esc(error)}</pre></section>'
+        body = (
+            topology_html
+            + f'<section class="error-panel"><h2>LLM 分析失败</h2>'
+            f'<pre>{esc(error)}</pre></section>'
+        )
     else:
         unknowns = analysis.get("unknowns")
         unknown_html = (
@@ -449,9 +702,11 @@ def report_html(result: dict[str, Any], source_path: Path) -> str:
         )
         body = f"""
 <section class="summary"><h2>站点概况</h2><p>{esc(analysis['site_summary'])}</p></section>
+{topology_html}
 <section><h2>网络层级</h2>{report_items(analysis['topology_layers'], 'layer')}</section>
 <section><h2>典型上行路径</h2>{paths_html(analysis['typical_paths'])}</section>
 <section><h2>业务理解</h2>{report_items(analysis['business_observations'], 'observation')}</section>
+<section class="config-section"><h2>配置逐段解读</h2>{config_explanations_html(result.get('config-explanations'))}</section>
 <section><h2>可靠性与影响风险</h2>{report_items(analysis['risks'], 'risk')}</section>
 <section><h2>VLAN 与关键配置</h2>{report_items(analysis['vlan_and_config'], 'config')}</section>
 <section><h2>信息不足</h2><ul>{unknown_html}</ul></section>
@@ -467,23 +722,70 @@ def report_html(result: dict[str, Any], source_path: Path) -> str:
 :root{{--bg:#f4f6f8;--surface:#fff;--line:#d6dde4;--text:#17212b;--muted:#667482;--blue:#1769aa;--green:#247a45;--amber:#a45c00;--red:#b42318;--violet:#68439a}}
 *{{box-sizing:border-box}}body{{margin:0;background:var(--bg);color:var(--text);font:14px/1.65 system-ui,-apple-system,"Segoe UI",sans-serif}}
 header{{padding:22px 26px;background:#17212b;color:#fff;border-bottom:3px solid #e0a100}}h1{{margin:0;font-size:22px;letter-spacing:0}}header p{{margin:5px 0 0;color:#c9d2dc;overflow-wrap:anywhere}}
-.metrics{{display:grid;grid-template-columns:repeat(5,1fr);background:var(--line);gap:1px;border-bottom:1px solid var(--line)}}.metric{{padding:12px 16px;background:#fff}}.metric span{{display:block;color:var(--muted);font-size:12px}}.metric strong{{font-size:18px}}
-main{{max-width:1180px;margin:auto;padding:20px;display:grid;grid-template-columns:1fr 1fr;gap:16px}}section{{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:17px}}section.summary,section.conclusion,section.error-panel{{grid-column:1/-1}}h2{{margin:0 0 12px;font-size:17px}}p{{margin:7px 0}}.item{{padding:11px 0;border-top:1px solid #e5e9ed}}.item:first-of-type{{border-top:0;padding-top:0}}.item-title{{display:flex;gap:8px;align-items:center}}.badge{{padding:1px 7px;border-radius:3px;font-size:12px}}.fact{{background:#e1eff9;color:var(--blue)}}.inference{{background:#efe8f8;color:var(--violet)}}.high{{background:#fee4e2;color:var(--red)}}.medium{{background:#fff0d5;color:var(--amber)}}.low{{background:#e2f2e7;color:var(--green)}}
+.metrics{{display:grid;grid-template-columns:repeat(7,1fr);background:var(--line);gap:1px;border-bottom:1px solid var(--line)}}.metric{{padding:12px 16px;background:#fff}}.metric span{{display:block;color:var(--muted);font-size:12px}}.metric strong{{font-size:18px}}
+main{{max-width:1280px;margin:auto;padding:20px;display:grid;grid-template-columns:1fr 1fr;gap:16px}}section{{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:17px}}section.summary,section.conclusion,section.error-panel,.topology-section,.config-section{{grid-column:1/-1}}h2{{margin:0 0 12px;font-size:17px}}h3{{margin:0 0 9px;font-size:14px}}h4{{margin:14px 0 4px;font-size:13px}}p{{margin:7px 0}}.item{{padding:11px 0;border-top:1px solid #e5e9ed}}.item:first-of-type{{border-top:0;padding-top:0}}.item-title{{display:flex;gap:8px;align-items:center}}.badge{{padding:1px 7px;border-radius:3px;font-size:12px;white-space:nowrap}}.fact{{background:#e1eff9;color:var(--blue)}}.inference{{background:#efe8f8;color:var(--violet)}}.high{{background:#fee4e2;color:var(--red)}}.medium{{background:#fff0d5;color:var(--amber)}}.low{{background:#e2f2e7;color:var(--green)}}
 .evidence{{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}}code{{padding:2px 6px;background:#edf1f4;border:1px solid #d8dee5;border-radius:3px;font:12px ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere}}.path-chain{{margin-top:9px;line-height:2.2}}.arrow{{color:var(--muted)}}.empty,.empty-evidence{{color:var(--muted)}}ul{{padding-left:20px}}pre{{white-space:pre-wrap;overflow-wrap:anywhere;background:#111820;color:#e6edf3;padding:14px;border-radius:4px}}
-@media(max-width:800px){{.metrics{{grid-template-columns:repeat(2,1fr)}}main{{grid-template-columns:1fr}}section,section.summary,section.conclusion{{grid-column:1}}}}
+.section-heading{{display:flex;align-items:center;justify-content:space-between;gap:12px}}.section-heading a{{color:var(--blue);font-weight:650;text-decoration:none}}iframe{{display:block;width:100%;height:720px;border:1px solid var(--line);background:#f7f8fa}}.error-text{{color:var(--red)}}
+.config-item{{padding:16px 0;border-top:1px solid #dfe5ea}}.config-item:first-of-type{{border-top:0;padding-top:0}}.config-header{{display:flex;justify-content:space-between;gap:12px;align-items:start}}.config-header div>span{{display:block;color:var(--muted);font-size:12px;margin-top:2px}}.config-ref{{margin:8px 0}}.config-columns{{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px}}.config-source,.config-understanding{{min-width:0;padding:13px;background:#f7f9fa;border:1px solid #dfe5ea;border-radius:4px}}.config-source pre{{max-height:420px;overflow:auto}}
+@media(max-width:800px){{.metrics{{grid-template-columns:repeat(2,1fr)}}main{{grid-template-columns:1fr}}section,section.summary,section.conclusion,.topology-section,.config-section{{grid-column:1}}.config-columns{{grid-template-columns:1fr}}iframe{{height:560px}}}}
 </style></head><body>
 <header><h1>通信网络业务分析</h1><p>{esc(source_path)}</p></header>
 <div class="metrics">
-<div class="metric"><span>状态</span><strong>{'成功' if result.get('status') else '失败'}</strong></div>
+<div class="metric"><span>LLM 分析</span><strong>{'成功' if result.get('status') else '失败'}</strong></div>
+<div class="metric"><span>拓扑图</span><strong>{'成功' if isinstance(topology, dict) and topology.get('status') else '失败'}</strong></div>
 <div class="metric"><span>节点数</span><strong>{esc(stats.get('node_count', 0))}</strong></div>
 <div class="metric"><span>链路数</span><strong>{esc(stats.get('link_count', 0))}</strong></div>
-<div class="metric"><span>设备组</span><strong>{esc(stats.get('device_group_count', 0))}</strong></div>
+<div class="metric"><span>配置段</span><strong>{esc(result.get('config_count', 0))}</strong></div>
+<div class="metric"><span>已解读配置</span><strong>{len(result.get('config-explanations', []))}</strong></div>
 <div class="metric"><span>模型</span><strong>{esc(result.get('model', ''))}</strong></div>
 </div><main>{body}</main></body></html>"""
 
 
 def html_output_path(output_root: Path, split: str, relative_path: Path) -> Path:
     return output_root / split / relative_path.with_suffix(".html")
+
+
+def topology_output_path(
+    output_root: Path,
+    split: str,
+    relative_path: Path,
+) -> Path:
+    return output_root / split / relative_path.with_name(
+        f"{relative_path.stem}.topology.html"
+    )
+
+
+def generate_topology_page(
+    dataset_root: Path,
+    output_root: Path,
+    split: str,
+    source_path: Path,
+    relative_path: Path,
+) -> dict[str, Any]:
+    output_path = topology_output_path(output_root, split, relative_path)
+    try:
+        graph = parse_graph(dataset_root, split, source_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(graph_page(graph), encoding="utf-8")
+        return {
+            "status": True,
+            "html_file": str(output_path.relative_to(output_root)),
+            "node_count": len(graph.nodes),
+            "edge_count": len(graph.edges),
+            "component_count": graph.component_count,
+            "isolated_count": graph.isolated_count,
+            "error": None,
+        }
+    except Exception as error:  # noqa: BLE001 - 可视化失败不阻断 LLM 分析。
+        return {
+            "status": False,
+            "html_file": str(output_path.relative_to(output_root)),
+            "node_count": 0,
+            "edge_count": 0,
+            "component_count": 0,
+            "isolated_count": 0,
+            "error": f"{type(error).__name__}: {error}",
+        }
 
 
 def successful_result(path: Path) -> bool:
@@ -495,6 +797,7 @@ def successful_result(path: Path) -> bool:
         return False
     return bool(
         isinstance(data, dict)
+        and data.get("report_version") == REPORT_VERSION
         and data.get("status") is True
         and isinstance(data.get("model-output"), dict)
     )
@@ -513,13 +816,30 @@ def process_file(
     html_path = html_output_path(output_root, split, relative_path)
     if args.resume and successful_result(result_path):
         result = json.loads(result_path.read_text(encoding="utf-8"))
-        if not html_path.is_file():
-            html_path.parent.mkdir(parents=True, exist_ok=True)
-            html_path.write_text(report_html(result, source_path), encoding="utf-8")
+        topology_path = topology_output_path(output_root, split, relative_path)
+        if not topology_path.is_file():
+            result["topology-visualization"] = generate_topology_page(
+                dataset_root,
+                output_root,
+                split,
+                source_path,
+                relative_path,
+            )
+            write_json_atomic(result_path, result)
+        html_path.parent.mkdir(parents=True, exist_ok=True)
+        html_path.write_text(report_html(result, source_path), encoding="utf-8")
         return {"status": None, "skipped": True, "result": result}
 
     started = time.monotonic()
+    topology = generate_topology_page(
+        dataset_root,
+        output_root,
+        split,
+        source_path,
+        relative_path,
+    )
     graph: dict[str, Any] | None = None
+    entries: list[dict[str, Any]] = []
     raw_output = ""
     attempts = 0
     try:
@@ -527,12 +847,19 @@ def process_file(
         if not isinstance(loaded, dict):
             raise ValueError(f"输入顶层必须是对象，实际为 {type(loaded).__name__}")
         graph = loaded
+        entries = extract_config_entries(graph)
         analysis, raw_output, attempts = request_analysis(
             client,
             args,
-            build_user_prompt(graph),
+            build_user_prompt(
+                graph,
+                entries,
+                args.max_config_interpretations,
+            ),
+            {str(entry["config_ref"]) for entry in entries},
         )
         result: dict[str, Any] = {
+            "report_version": REPORT_VERSION,
             "source_file": str(relative_path),
             "split": split,
             "status": True,
@@ -540,6 +867,9 @@ def process_file(
             "request_attempts": attempts,
             "elapsed_seconds": round(time.monotonic() - started, 3),
             "graph_statistics": graph_statistics(graph),
+            "topology-visualization": topology,
+            "config_count": len(entries),
+            "config-explanations": resolve_config_explanations(entries, analysis),
             "model-output": analysis,
             "error_stage": None,
             "error": None,
@@ -548,6 +878,7 @@ def process_file(
         raw_output = raw_output or str(getattr(error, "raw_model_output", ""))
         stage = "input" if graph is None else "request_or_model_output"
         result = {
+            "report_version": REPORT_VERSION,
             "source_file": str(relative_path),
             "split": split,
             "status": False,
@@ -555,6 +886,9 @@ def process_file(
             "request_attempts": attempts or args.retries + 1,
             "elapsed_seconds": round(time.monotonic() - started, 3),
             "graph_statistics": graph_statistics(graph) if graph is not None else {},
+            "topology-visualization": topology,
+            "config_count": len(entries),
+            "config-explanations": [],
             "model-output": None,
             "raw_model_output": raw_output or None,
             "error_stage": stage,
@@ -569,7 +903,7 @@ def process_file(
 
 def write_failures(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    fields = ["split", "source_file", "error_stage", "error"]
+    fields = ["split", "source_file", "component", "error_stage", "error"]
     with path.open("w", encoding="utf-8-sig", newline="") as file:
         writer = csv.DictWriter(file, fieldnames=fields)
         writer.writeheader()
@@ -584,10 +918,14 @@ def index_html(output_root: Path, records: list[dict[str, Any]]) -> str:
         relative_html = relative_json.with_suffix(".html")
         analysis = result.get("model-output") or {}
         risk_count = len(analysis.get("risks", [])) if isinstance(analysis, dict) else 0
+        topology = result.get("topology-visualization") or {}
+        interpreted_count = len(result.get("config-explanations", []))
         rows.append(f"""<tr data-search="{esc(str(relative_json).lower())}">
 <td>{esc(relative_json)}</td><td>{'成功' if result.get('status') else '失败'}</td>
+<td>{'成功' if topology.get('status') else '失败'}</td>
 <td>{esc(result.get('graph_statistics', {}).get('node_count', 0))}</td>
 <td>{esc(result.get('graph_statistics', {}).get('link_count', 0))}</td>
+<td>{esc(result.get('config_count', 0))}</td><td>{interpreted_count}</td>
 <td>{risk_count}</td><td>{esc(result.get('elapsed_seconds', 0))}</td>
 <td><a href="{quote(str(relative_html))}">查看报告</a></td></tr>""")
     return f"""<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
@@ -595,7 +933,8 @@ def index_html(output_root: Path, records: list[dict[str, Any]]) -> str:
 <style>*{{box-sizing:border-box}}body{{margin:0;background:#f4f6f8;color:#17212b;font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}}header{{padding:22px 26px;background:#17212b;color:#fff;border-bottom:3px solid #e0a100}}h1{{margin:0;font-size:22px}}header p{{margin:5px 0 0;color:#c9d2dc}}main{{padding:18px}}input{{width:min(520px,100%);padding:9px 11px;margin-bottom:12px;border:1px solid #aeb8c3;border-radius:4px}}.table{{overflow:auto;border:1px solid #d6dde4;background:#fff}}table{{width:100%;border-collapse:collapse}}th,td{{padding:10px 12px;border-bottom:1px solid #e3e7eb;text-align:left}}th{{background:#edf1f4;color:#45515f}}tr:hover{{background:#f1f7fb}}a{{color:#1769aa;font-weight:650;text-decoration:none}}</style></head>
 <body><header><h1>通信网络业务分析总览</h1><p>{esc(output_root)}</p></header><main>
 <input id="search" type="search" placeholder="搜索划分或文件名"><div class="table"><table><thead><tr>
-<th>文件</th><th>状态</th><th>节点</th><th>链路</th><th>风险项</th><th>耗时（秒）</th><th>报告</th>
+<th>文件</th><th>LLM 分析</th><th>拓扑图</th><th>节点</th><th>链路</th>
+<th>配置段</th><th>已解读</th><th>风险项</th><th>耗时（秒）</th><th>报告</th>
 </tr></thead><tbody>{''.join(rows)}</tbody></table></div></main>
 <script>const q=document.getElementById('search'),rows=[...document.querySelectorAll('tbody tr')];q.addEventListener('input',()=>{{const v=q.value.trim().toLowerCase();rows.forEach(r=>r.hidden=v&&!r.dataset.search.includes(v))}});</script>
 </body></html>"""
@@ -619,6 +958,8 @@ def run(args: argparse.Namespace) -> None:
     records: list[dict[str, Any]] = []
     failures: list[dict[str, Any]] = []
     succeeded = failed = skipped = 0
+    topology_succeeded = topology_failed = 0
+    total_configs = interpreted_configs = 0
     started = time.monotonic()
 
     for index, (split, source_path) in enumerate(items, start=1):
@@ -631,13 +972,40 @@ def run(args: argparse.Namespace) -> None:
             source_path,
         )
         records.append(record)
+        result = record["result"]
         if record["skipped"]:
             skipped += 1
         elif record["status"]:
             succeeded += 1
         else:
             failed += 1
-            failures.append(record["result"])
+            failures.append(
+                {
+                    **result,
+                    "component": "llm-analysis",
+                }
+            )
+
+        topology = result.get("topology-visualization")
+        if isinstance(topology, dict) and topology.get("status") is True:
+            topology_succeeded += 1
+        else:
+            topology_failed += 1
+            failures.append(
+                {
+                    "split": result.get("split"),
+                    "source_file": result.get("source_file"),
+                    "component": "topology-visualization",
+                    "error_stage": "topology-render",
+                    "error": (
+                        topology.get("error")
+                        if isinstance(topology, dict)
+                        else "missing topology result"
+                    ),
+                }
+            )
+        total_configs += int(result.get("config_count", 0))
+        interpreted_configs += len(result.get("config-explanations", []))
 
         if args.progress_interval and (
             index % args.progress_interval == 0 or index == len(items)
@@ -668,10 +1036,15 @@ def run(args: argparse.Namespace) -> None:
         "split": args.split,
         "context_mode": "complete_original_json_without_truncation",
         "thinking_enabled": args.enable_thinking,
+        "max_config_interpretations": args.max_config_interpretations,
         "input_files": len(items),
         "succeeded_files": succeeded,
         "failed_files": failed,
         "skipped_files": skipped,
+        "topology_succeeded_files": topology_succeeded,
+        "topology_failed_files": topology_failed,
+        "total_config_segments": total_configs,
+        "interpreted_config_segments": interpreted_configs,
         "elapsed_seconds": round(elapsed, 3),
     }
     write_json_atomic(output_root / SUMMARY_FILE, summary)
