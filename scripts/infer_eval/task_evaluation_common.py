@@ -506,6 +506,10 @@ def run_evaluation(
         "sample_count": sample_count,
         "successful_model_returns": successful_model_returns,
         "failed_model_returns": sample_count - successful_model_returns,
+        "model_success_rate": round(
+            successful_model_returns / sample_count,
+            8,
+        ),
         "swanlab_experiment_color": deterministic_experiment_color(
             args.swanlab_experiment,
             args.swanlab_color_seed,

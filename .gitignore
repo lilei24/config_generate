@@ -8,6 +8,7 @@ nearest_core_dataset/
 node_failure_reroute_dataset/
 node_failure_localization_dataset/
 node_failure_ap_impact_dataset/
+link_port_prediction_dataset/
 opencode-results/
 opencode-harness-workspace/
 vllm-results/
