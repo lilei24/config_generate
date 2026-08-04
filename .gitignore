@@ -13,6 +13,7 @@ opencode-results/
 opencode-harness-workspace/
 vllm-results/
 vlan-llm-analysis/
+vlan-config-analysis/
 network-business-analysis/
 QA/
 QA_token_analysis/
