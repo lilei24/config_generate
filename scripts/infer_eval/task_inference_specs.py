@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""任务 2-4 的数据路径、Prompt 和模型输出结构定义。"""
+"""任务 2-5 的数据路径、Prompt 和模型输出结构定义。"""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from typing import Any
 from task_batch_inference_common import (
     TaskInferenceSpec,
     validate_ap_impact_answer,
+    validate_link_port_answer,
     validate_path_answer,
 )
 
@@ -25,6 +26,13 @@ PATH_OUTPUT_EXAMPLE = """{
 
 AP_IMPACT_OUTPUT_EXAMPLE = """{
   "disconnected_ap_ids": ["AP_NODE_1", "AP_NODE_2"]
+}"""
+
+LINK_PORT_SYSTEM_PROMPT = """你是网络链路端口补全助手。请严格依据给定的已遮挡拓扑、链路两端设备信息和其他链路端口规律预测目标端口。不得虚构额外字段，不要输出解释、Markdown 代码块或思考过程，只输出一个合法 JSON 对象。"""
+
+LINK_PORT_OUTPUT_EXAMPLE = """{
+  "LEFTPORT": "预测的source侧端口字符串",
+  "RIGHTPORT": "预测的target侧端口字符串"
 }"""
 
 
@@ -191,6 +199,67 @@ def build_impact_opencode_prompt(
 {AP_IMPACT_OUTPUT_EXAMPLE}"""
 
 
+def target_link_index(sample: dict[str, Any]) -> int:
+    value = sample.get("task_target_link_index")
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError("样本缺少有效的 task_target_link_index")
+    return value
+
+
+def build_link_port_vllm_prompt(sample: dict[str, Any]) -> str:
+    source_id = required_string(sample, "task_source_node_id")
+    target_id = required_string(sample, "task_target_node_id")
+    link_index = target_link_index(sample)
+    return f"""请完成输入 JSON 中 task_question 描述的链路端口补全任务。
+
+目标链路索引：{link_index}
+source 节点 ID：{source_id}
+target 节点 ID：{target_id}
+
+要求：
+1. LEFTPORT 对应 source 侧端口，RIGHTPORT 对应 target 侧端口。
+2. 目标链路的 LEFTPORT、RIGHTPORT 和 LABEL 已删除，不得假设 LABEL 仍然存在。
+3. 优先参考两端设备类型、型号、角色以及其他链路的端口命名和分配规律。
+4. 端口值必须保持预测的完整原始字符串格式。
+5. 只输出以下结构的 JSON，不输出解释、代码块或思考过程：
+{LINK_PORT_OUTPUT_EXAMPLE}
+
+【完整遮挡任务 JSON】
+{compact_json(sample)}
+"""
+
+
+def build_link_port_opencode_prompt(
+    site: str,
+    sample: dict[str, Any],
+) -> str:
+    source_id = required_string(sample, "task_source_node_id")
+    target_id = required_string(sample, "task_target_node_id")
+    link_index = target_link_index(sample)
+    return f"""你是网络链路端口补全 Agent。
+
+站点标识：{site}
+目标链路索引：{link_index}
+source 节点 ID：{source_id}
+target 节点 ID：{target_id}
+
+本 Prompt 已提供完整的遮挡任务 JSON。禁止调用原始站点拓扑 Provider，因为原始数据中的目标端口和 LABEL 属于标准答案，会造成答案泄漏。
+
+请根据目标链路两端设备信息、其他链路端口和全站点端口命名规律补全端口。
+
+要求：
+1. LEFTPORT 对应 source 侧端口，RIGHTPORT 对应 target 侧端口。
+2. 端口值必须保持完整字符串格式。
+3. 只输出 JSON，不输出解释、代码块或思考过程。
+
+输出格式：
+{LINK_PORT_OUTPUT_EXAMPLE}
+
+【完整遮挡任务 JSON】
+{compact_json(sample)}
+"""
+
+
 NEAREST_CORE_SPEC = TaskInferenceSpec(
     task_name="nearest_reachable_role_path",
     default_dataset_root=Path("nearest_core_dataset"),
@@ -225,4 +294,16 @@ NODE_FAILURE_AP_IMPACT_SPEC = TaskInferenceSpec(
     build_vllm_prompt=build_impact_vllm_prompt,
     build_opencode_prompt=build_impact_opencode_prompt,
     validate_answer=validate_ap_impact_answer,
+)
+
+LINK_PORT_PREDICTION_SPEC = TaskInferenceSpec(
+    task_name="link_port_prediction",
+    default_dataset_root=Path("link_port_prediction_dataset"),
+    default_vllm_output_root=Path("vllm-results/link_port_prediction"),
+    default_opencode_output_root=Path("opencode-results/link_port_prediction"),
+    default_model="qwen3-8b",
+    system_prompt=LINK_PORT_SYSTEM_PROMPT,
+    build_vllm_prompt=build_link_port_vllm_prompt,
+    build_opencode_prompt=build_link_port_opencode_prompt,
+    validate_answer=validate_link_port_answer,
 )

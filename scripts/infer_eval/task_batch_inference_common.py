@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""任务 2-4 批量推理脚本共用的 vLLM 与 OpenCode 调用框架。"""
+"""任务 2-5 批量推理脚本共用的 vLLM 与 OpenCode 调用框架。"""
 
 from __future__ import annotations
 
@@ -1033,3 +1033,12 @@ def validate_ap_impact_answer(answer: dict[str, Any]) -> None:
         raise ValueError("disconnected_ap_ids 必须是数组")
     if not all(isinstance(ap_id, str) and ap_id for ap_id in ap_ids):
         raise ValueError("disconnected_ap_ids 中的元素必须是非空字符串")
+
+
+def validate_link_port_answer(answer: dict[str, Any]) -> None:
+    left_port = answer.get("LEFTPORT")
+    right_port = answer.get("RIGHTPORT")
+    if not isinstance(left_port, str) or not left_port.strip():
+        raise ValueError("LEFTPORT 必须是非空字符串")
+    if not isinstance(right_port, str) or not right_port.strip():
+        raise ValueError("RIGHTPORT 必须是非空字符串")
