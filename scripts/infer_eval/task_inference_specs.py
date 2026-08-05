@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""任务 2-5 的数据路径、Prompt 和模型输出结构定义。"""
+"""拓扑任务的数据路径、Prompt 和模型输出结构定义。"""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from typing import Any
 from task_batch_inference_common import (
     TaskInferenceSpec,
     validate_ap_impact_answer,
+    validate_link_failure_answer,
     validate_link_port_answer,
     validate_path_answer,
 )
@@ -33,6 +34,14 @@ LINK_PORT_SYSTEM_PROMPT = """你是网络链路端口补全助手。请严格依
 LINK_PORT_OUTPUT_EXAMPLE = """{
   "LEFTPORT": "预测的source侧端口字符串",
   "RIGHTPORT": "预测的target侧端口字符串"
+}"""
+
+LINK_FAILURE_OUTPUT_EXAMPLE = """{
+  "connected": true,
+  "path_length": 3,
+  "paths": [
+    ["NODE_A", "NODE_B", "NODE_C", "NODE_D"]
+  ]
 }"""
 
 
@@ -146,6 +155,50 @@ def build_reroute_opencode_prompt(
 
 输出格式：
 {PATH_OUTPUT_EXAMPLE}"""
+
+
+def build_link_failure_vllm_prompt(sample: dict[str, Any]) -> str:
+    source_id = required_string(sample, "task_source_node_id")
+    target_id = required_string(sample, "task_target_node_id")
+    failed_link = sample.get("task_failed_link")
+    if not isinstance(failed_link, dict):
+        raise ValueError("样本缺少有效的 task_failed_link")
+    link_index = failed_link.get("link_index")
+    if isinstance(link_index, bool) or not isinstance(link_index, int):
+        raise ValueError("task_failed_link.link_index 必须是整数")
+    return f"""请完成输入 JSON 中 task_question 描述的链路故障绕行任务。
+
+源节点 ID：{source_id}
+目标节点 ID：{target_id}
+故障链路索引：{link_index}
+
+要求：
+1. 计算时只排除 links[{link_index}] 指定的物理链路，保留链路两端节点及其他链路。
+2. 如果同一对节点之间存在其他链路，不得将它们一并删除。
+3. connected 表示故障后源节点能否到达目标节点。
+4. 连通时，path_length 是故障后的最短链路跳数，并输出全部等长最短路径。
+5. 失联时，connected 为 false、path_length 为 null、paths 为空数组。
+6. paths 使用节点 ID，从源节点指向目标节点，且不得经过故障链路。
+7. 只输出包含 connected、path_length、paths 的 JSON 对象，不输出解释、代码块或思考过程。
+
+输出格式示例：
+{LINK_FAILURE_OUTPUT_EXAMPLE}
+
+【完整任务 JSON】
+{compact_json(sample)}
+"""
+
+
+def build_link_failure_opencode_prompt(
+    site: str,
+    sample: dict[str, Any],
+) -> str:
+    # 当前只提供 vLLM 入口；保留同规格构造器便于后续接入 OpenCode。
+    return build_link_failure_vllm_prompt(sample).replace(
+        "【完整任务 JSON】",
+        f"站点标识：{site}\n\n【完整任务 JSON】",
+        1,
+    )
 
 
 def build_impact_vllm_prompt(sample: dict[str, Any]) -> str:
@@ -282,6 +335,18 @@ NODE_FAILURE_REROUTE_SPEC = TaskInferenceSpec(
     build_vllm_prompt=build_reroute_vllm_prompt,
     build_opencode_prompt=build_reroute_opencode_prompt,
     validate_answer=validate_path_answer,
+)
+
+LINK_FAILURE_REROUTE_SPEC = TaskInferenceSpec(
+    task_name="link_failure_reroute",
+    default_dataset_root=Path("link_failure_reroute_dataset"),
+    default_vllm_output_root=Path("vllm-results/link_failure_reroute"),
+    default_opencode_output_root=Path("opencode-results/link_failure_reroute"),
+    default_model="qwen3-8b",
+    system_prompt=SYSTEM_PROMPT,
+    build_vllm_prompt=build_link_failure_vllm_prompt,
+    build_opencode_prompt=build_link_failure_opencode_prompt,
+    validate_answer=validate_link_failure_answer,
 )
 
 NODE_FAILURE_AP_IMPACT_SPEC = TaskInferenceSpec(

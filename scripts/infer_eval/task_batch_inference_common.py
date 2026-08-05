@@ -1027,6 +1027,21 @@ def validate_path_answer(answer: dict[str, Any]) -> None:
             raise ValueError(f"paths[{index}] 与 path_length 不一致")
 
 
+def validate_link_failure_answer(answer: dict[str, Any]) -> None:
+    connected = answer.get("connected")
+    path_length = answer.get("path_length")
+    paths = answer.get("paths")
+    if not isinstance(connected, bool):
+        raise ValueError("connected 必须是布尔值")
+    if connected:
+        validate_path_answer(answer)
+        return
+    if path_length is not None:
+        raise ValueError("connected=false 时 path_length 必须是 null")
+    if paths != []:
+        raise ValueError("connected=false 时 paths 必须是空数组")
+
+
 def validate_ap_impact_answer(answer: dict[str, Any]) -> None:
     ap_ids = answer.get("disconnected_ap_ids")
     if not isinstance(ap_ids, list):
