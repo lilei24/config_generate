@@ -3,8 +3,9 @@
 
 对每个 AP 按业务角色优先级选择最高可达层级中的最近目标，枚举正常最短
 路径上的链路故障，并将候选划分为等价切换、绕行和失联三类。默认每张图
-按照 2:2:1 的配额分别抽取等价切换、绕行和失联样本，同时生成内容对应的
-with_answer 和 without_answer 数据集。
+按照 1:1:1 的配额分别抽取等价切换、绕行和失联样本；只有至少存在一种
+可切换或可绕行样本时，才允许附带失联样本。输出内容对应的 with_answer
+和 without_answer 数据集。
 """
 
 from __future__ import annotations
@@ -25,8 +26,8 @@ DEFAULT_OUTPUT_ROOT = Path("link_failure_reroute_dataset")
 DEFAULT_RANDOM_SEED = 20260805
 DEFAULT_SPLITS = ("train", "val")
 DEFAULT_PROGRESS_INTERVAL = 100
-DEFAULT_EQUAL_COST_SAMPLES_PER_GRAPH = 2
-DEFAULT_DETOUR_SAMPLES_PER_GRAPH = 2
+DEFAULT_EQUAL_COST_SAMPLES_PER_GRAPH = 1
+DEFAULT_DETOUR_SAMPLES_PER_GRAPH = 1
 DEFAULT_DISCONNECTED_SAMPLES_PER_GRAPH = 1
 
 WITH_ANSWER_DIR = "with_answer"
@@ -434,10 +435,14 @@ def select_candidates(
     for candidate in candidates:
         by_type[candidate.result_type].append(candidate)
     selected: list[LinkFailureCandidate] = []
-    for result_type in RESULT_TYPE_ORDER:
+    for result_type in RESULT_TYPE_ORDER[:2]:
         values = by_type[result_type]
         rng.shuffle(values)
         selected.extend(values[: quotas[result_type]])
+    if selected:
+        disconnected = by_type["disconnected"]
+        rng.shuffle(disconnected)
+        selected.extend(disconnected[: quotas["disconnected"]])
     return selected
 
 
@@ -562,6 +567,7 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
         "seed": args.seed,
         "samples_per_graph": sum(selection_quotas.values()),
         "selection_quotas": selection_quotas,
+        "disconnected_requires_recoverable_sample": True,
         "selection_types": list(RESULT_TYPE_ORDER),
         "target_role_priority": [role for _, role in TARGET_ROLE_PRIORITY],
         "splits": {},
@@ -590,6 +596,8 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
             else:
                 candidates, counters, reason = collect_candidates(graph)
             selected = select_candidates(candidates, selection_quotas, rng)
+            if candidates and not selected and not reason:
+                reason = "only-disconnected-candidates-excluded"
             if graph is None or not selected:
                 split_summary["skipped_graphs"] += 1
                 append_issue(
