@@ -3,8 +3,8 @@
 
 对每个 AP 按业务角色优先级选择最高可达层级中的最近目标，枚举正常最短
 路径上的链路故障，并将候选划分为等价切换、绕行和失联三类。默认每张图
-从每类中随机选择一个样本，同时生成内容对应的 with_answer 和
-without_answer 数据集。
+按照 2:2:1 的配额分别抽取等价切换、绕行和失联样本，同时生成内容对应的
+with_answer 和 without_answer 数据集。
 """
 
 from __future__ import annotations
@@ -25,7 +25,9 @@ DEFAULT_OUTPUT_ROOT = Path("link_failure_reroute_dataset")
 DEFAULT_RANDOM_SEED = 20260805
 DEFAULT_SPLITS = ("train", "val")
 DEFAULT_PROGRESS_INTERVAL = 100
-DEFAULT_SAMPLES_PER_GRAPH = 3
+DEFAULT_EQUAL_COST_SAMPLES_PER_GRAPH = 2
+DEFAULT_DETOUR_SAMPLES_PER_GRAPH = 2
+DEFAULT_DISCONNECTED_SAMPLES_PER_GRAPH = 1
 
 WITH_ANSWER_DIR = "with_answer"
 WITHOUT_ANSWER_DIR = "without_answer"
@@ -106,10 +108,22 @@ def parse_args() -> argparse.Namespace:
         help="固定随机种子，默认: %(default)s",
     )
     parser.add_argument(
-        "--samples-per-graph",
+        "--equal-cost-samples-per-graph",
         type=int,
-        default=DEFAULT_SAMPLES_PER_GRAPH,
-        help="每张图最多生成的样本数，范围 1-3，默认: %(default)s",
+        default=DEFAULT_EQUAL_COST_SAMPLES_PER_GRAPH,
+        help="每张图最多抽取的等价切换样本数，默认: %(default)s",
+    )
+    parser.add_argument(
+        "--detour-samples-per-graph",
+        type=int,
+        default=DEFAULT_DETOUR_SAMPLES_PER_GRAPH,
+        help="每张图最多抽取的绕行样本数，默认: %(default)s",
+    )
+    parser.add_argument(
+        "--disconnected-samples-per-graph",
+        type=int,
+        default=DEFAULT_DISCONNECTED_SAMPLES_PER_GRAPH,
+        help="每张图最多抽取的失联样本数，默认: %(default)s",
     )
     parser.add_argument(
         "--progress-interval",
@@ -119,8 +133,15 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--indent", type=int, default=2)
     args = parser.parse_args()
-    if not 1 <= args.samples_per_graph <= len(RESULT_TYPE_ORDER):
-        parser.error("--samples-per-graph 必须在 1 到 3 之间")
+    quotas = (
+        args.equal_cost_samples_per_graph,
+        args.detour_samples_per_graph,
+        args.disconnected_samples_per_graph,
+    )
+    if any(quota < 0 for quota in quotas):
+        parser.error("三类样本配额不能小于 0")
+    if sum(quotas) == 0:
+        parser.error("三类样本配额不能全部为 0")
     if args.progress_interval < 0:
         parser.error("--progress-interval 不能小于 0")
     if args.indent < 0:
@@ -406,7 +427,7 @@ def collect_candidates(
 
 def select_candidates(
     candidates: list[LinkFailureCandidate],
-    samples_per_graph: int,
+    quotas: dict[str, int],
     rng: random.Random,
 ) -> list[LinkFailureCandidate]:
     by_type: dict[str, list[LinkFailureCandidate]] = defaultdict(list)
@@ -416,10 +437,7 @@ def select_candidates(
     for result_type in RESULT_TYPE_ORDER:
         values = by_type[result_type]
         rng.shuffle(values)
-        if values:
-            selected.append(values[0])
-        if len(selected) >= samples_per_graph:
-            break
+        selected.extend(values[: quotas[result_type]])
     return selected
 
 
@@ -528,6 +546,11 @@ def write_stats(path: Path, rows: list[dict[str, Any]]) -> None:
 
 def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
     rng = random.Random(args.seed)
+    selection_quotas = {
+        "equal_cost_failover": args.equal_cost_samples_per_graph,
+        "detour": args.detour_samples_per_graph,
+        "disconnected": args.disconnected_samples_per_graph,
+    }
     args.output_root.mkdir(parents=True, exist_ok=True)
     issue_path = args.output_root / ISSUES_FILE
     if issue_path.exists():
@@ -537,7 +560,8 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
         "dataset_root": str(args.dataset_root),
         "output_root": str(args.output_root),
         "seed": args.seed,
-        "samples_per_graph": args.samples_per_graph,
+        "samples_per_graph": sum(selection_quotas.values()),
+        "selection_quotas": selection_quotas,
         "selection_types": list(RESULT_TYPE_ORDER),
         "target_role_priority": [role for _, role in TARGET_ROLE_PRIORITY],
         "splits": {},
@@ -565,7 +589,7 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
                 reason = error
             else:
                 candidates, counters, reason = collect_candidates(graph)
-            selected = select_candidates(candidates, args.samples_per_graph, rng)
+            selected = select_candidates(candidates, selection_quotas, rng)
             if graph is None or not selected:
                 split_summary["skipped_graphs"] += 1
                 append_issue(
