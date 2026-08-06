@@ -1042,6 +1042,26 @@ def validate_link_failure_answer(answer: dict[str, Any]) -> None:
         raise ValueError("connected=false 时 paths 必须是空数组")
 
 
+def validate_unique_node_id_list(value: Any, field_name: str) -> None:
+    if not isinstance(value, list):
+        raise ValueError(f"{field_name} 必须是数组")
+    if not all(isinstance(node_id, str) and node_id for node_id in value):
+        raise ValueError(f"{field_name} 中的元素必须是非空节点 ID 字符串")
+    if len(value) != len(set(value)):
+        raise ValueError(f"{field_name} 中不能包含重复节点 ID")
+
+
+def validate_neighborhood_reachability_answer(answer: dict[str, Any]) -> None:
+    neighbors = answer.get("one_hop_neighbor_node_ids")
+    reachable = answer.get("reachable_node_ids")
+    validate_unique_node_id_list(neighbors, "one_hop_neighbor_node_ids")
+    validate_unique_node_id_list(reachable, "reachable_node_ids")
+    if not set(neighbors).issubset(reachable):
+        raise ValueError(
+            "one_hop_neighbor_node_ids 必须是 reachable_node_ids 的子集"
+        )
+
+
 def validate_ap_impact_answer(answer: dict[str, Any]) -> None:
     ap_ids = answer.get("disconnected_ap_ids")
     if not isinstance(ap_ids, list):

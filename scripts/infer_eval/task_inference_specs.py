@@ -12,6 +12,7 @@ from task_batch_inference_common import (
     validate_ap_impact_answer,
     validate_link_failure_answer,
     validate_link_port_answer,
+    validate_neighborhood_reachability_answer,
     validate_path_answer,
 )
 
@@ -50,6 +51,11 @@ LINK_FAILURE_OUTPUT_EXAMPLES = """输出格式示例 1（故障后仍然连通�
   "connected": false,
   "path_length": null,
   "paths": []
+}"""
+
+NEIGHBORHOOD_REACHABILITY_OUTPUT_EXAMPLE = """{
+  "one_hop_neighbor_node_ids": ["NODE_B"],
+  "reachable_node_ids": ["NODE_B", "NODE_C", "NODE_D"]
 }"""
 
 
@@ -208,6 +214,40 @@ def build_link_failure_opencode_prompt(
     )
 
 
+def build_neighborhood_reachability_vllm_prompt(
+    sample: dict[str, Any],
+) -> str:
+    target_node_id = required_string(sample, "task_target_node_id")
+    return f"""请完成输入 JSON 中 task_question 描述的节点邻居与可达性任务。
+
+目标节点 ID：{target_node_id}
+
+要求：
+1. 将 links 表示的物理链路按无向图处理，不使用 source/target 判断方向。
+2. one_hop_neighbor_node_ids 只包含与目标节点直接相连的节点。
+3. reachable_node_ids 包含经过一条或多条链路可达的全部节点。
+4. 两个列表都不得包含目标节点自身，也不得包含重复节点 ID。
+5. 不同连通分量中的节点不能输出。
+6. 节点必须使用 nodes[].id，并按字典序排列。
+7. 只输出以下结构的 JSON 对象，不输出解释、代码块或思考过程：
+{NEIGHBORHOOD_REACHABILITY_OUTPUT_EXAMPLE}
+
+【完整任务 JSON】
+{compact_json(sample)}
+"""
+
+
+def build_neighborhood_reachability_opencode_prompt(
+    site: str,
+    sample: dict[str, Any],
+) -> str:
+    return build_neighborhood_reachability_vllm_prompt(sample).replace(
+        "【完整任务 JSON】",
+        f"站点标识：{site}\n\n【完整任务 JSON】",
+        1,
+    )
+
+
 def build_impact_vllm_prompt(sample: dict[str, Any]) -> str:
     return f"""请完成输入 JSON 中 task_question 描述的节点故障 AP 影响面任务。
 
@@ -354,6 +394,20 @@ LINK_FAILURE_REROUTE_SPEC = TaskInferenceSpec(
     build_vllm_prompt=build_link_failure_vllm_prompt,
     build_opencode_prompt=build_link_failure_opencode_prompt,
     validate_answer=validate_link_failure_answer,
+)
+
+NODE_NEIGHBORHOOD_REACHABILITY_SPEC = TaskInferenceSpec(
+    task_name="node_neighborhood_and_reachability",
+    default_dataset_root=Path("node_neighborhood_reachability_dataset"),
+    default_vllm_output_root=Path("vllm-results/node_neighborhood_reachability"),
+    default_opencode_output_root=Path(
+        "opencode-results/node_neighborhood_reachability"
+    ),
+    default_model="qwen3-8b",
+    system_prompt=SYSTEM_PROMPT,
+    build_vllm_prompt=build_neighborhood_reachability_vllm_prompt,
+    build_opencode_prompt=build_neighborhood_reachability_opencode_prompt,
+    validate_answer=validate_neighborhood_reachability_answer,
 )
 
 NODE_FAILURE_AP_IMPACT_SPEC = TaskInferenceSpec(
