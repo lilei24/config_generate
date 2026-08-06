@@ -11,6 +11,7 @@ node_failure_ap_impact_dataset/
 link_port_prediction_dataset/
 link_failure_reroute_dataset/
 node_neighborhood_reachability_dataset/
+ap_pair_via_core_path_dataset/
 opencode-results/
 opencode-harness-workspace/
 vllm-results/
