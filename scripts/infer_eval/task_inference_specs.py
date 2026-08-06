@@ -36,12 +36,20 @@ LINK_PORT_OUTPUT_EXAMPLE = """{
   "RIGHTPORT": "预测的target侧端口字符串"
 }"""
 
-LINK_FAILURE_OUTPUT_EXAMPLE = """{
+LINK_FAILURE_OUTPUT_EXAMPLES = """输出格式示例 1（故障后仍然连通）：
+{
   "connected": true,
   "path_length": 3,
   "paths": [
     ["NODE_A", "NODE_B", "NODE_C", "NODE_D"]
   ]
+}
+
+输出格式示例 2（故障后不连通）：
+{
+  "connected": false,
+  "path_length": null,
+  "paths": []
 }"""
 
 
@@ -181,8 +189,7 @@ def build_link_failure_vllm_prompt(sample: dict[str, Any]) -> str:
 6. paths 使用节点 ID，从源节点指向目标节点，且不得经过故障链路。
 7. 只输出包含 connected、path_length、paths 的 JSON 对象，不输出解释、代码块或思考过程。
 
-输出格式示例：
-{LINK_FAILURE_OUTPUT_EXAMPLE}
+{LINK_FAILURE_OUTPUT_EXAMPLES}
 
 【完整任务 JSON】
 {compact_json(sample)}

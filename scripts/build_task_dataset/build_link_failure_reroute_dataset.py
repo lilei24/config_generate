@@ -471,14 +471,25 @@ def build_task_graph(
     task_graph["task_source_node_id"] = candidate.source_id
     task_graph["task_target_node_id"] = candidate.target_id
     task_graph["task_failed_link"] = failed_link_payload(failed_link)
-    task_graph["task_question"] = (
-        f"链路索引 {failed_link.index} 发生故障，该链路连接节点 ID "
-        f"{failed_link.source_id} 和节点 ID {failed_link.target_id}。请判断节点 ID "
-        f"{candidate.source_id} 到节点 ID {candidate.target_id} 在不经过该故障链路时"
-        "是否仍然可达。如果可达，请输出故障后的最短跳数和全部最短物理路径；"
-        "如果不可达，path_length 使用 null，paths 使用空数组。路径中的节点使用"
-        "节点 ID。只输出包含 connected、path_length、paths 的 JSON。"
-    )
+    task_graph["task_question"] = f"""链路索引 {failed_link.index} 发生故障，该链路连接节点 ID {failed_link.source_id} 和节点 ID {failed_link.target_id}。请判断节点 ID {candidate.source_id} 到节点 ID {candidate.target_id} 在不经过该故障链路时是否仍然可达。
+
+如果可达，请输出故障后的最短跳数和全部最短物理路径；如果不可达，path_length 使用 null，paths 使用空数组。路径中的节点使用节点 ID。只输出包含 connected、path_length、paths 的 JSON。
+
+输出格式示例 1（故障后仍然连通）：
+{{
+  "connected": true,
+  "path_length": 3,
+  "paths": [
+    ["NODE_A", "NODE_B", "NODE_C", "NODE_D"]
+  ]
+}}
+
+输出格式示例 2（故障后不连通）：
+{{
+  "connected": false,
+  "path_length": null,
+  "paths": []
+}}"""
     task_graph["task_answer"] = {
         "connected": candidate.connected,
         "path_length": candidate.path_length,
