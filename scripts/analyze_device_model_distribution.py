@@ -7,7 +7,7 @@ import argparse
 import csv
 import json
 import time
-from collections import Counter
+from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -17,9 +17,11 @@ DEFAULT_OUTPUT_DIR = Path("/tmp/device_model_analysis")
 DEFAULT_SPLIT = "all"
 DEFAULT_PROGRESS_INTERVAL = 100
 
-MODEL_COUNTS_FILE = "device_model_counts.json"
+MODEL_COUNTS_FILE = "device_model_counts.csv"
+LEGACY_MODEL_COUNTS_FILE = "device_model_counts.json"
 SUMMARY_FILE = "device_model_summary.json"
 ERROR_FILE = "analysis_errors.csv"
+MISSING_DEVICE_TYPE = "<missing>"
 
 
 def parse_args() -> argparse.Namespace:
@@ -89,18 +91,31 @@ def normalized_model(value: Any) -> str | None:
     return text or None
 
 
+def normalized_device_type(value: Any) -> str:
+    if value is None or isinstance(value, (dict, list)):
+        return MISSING_DEVICE_TYPE
+    text = str(value).strip()
+    return text or MISSING_DEVICE_TYPE
+
+
 def analyze_graph(
     graph: dict[str, Any],
-) -> tuple[Counter[str], Counter[str], Counter[str]]:
-    """返回型号数量、节点状态数量和设备字段来源数量。"""
+) -> tuple[
+    Counter[str],
+    dict[str, Counter[str]],
+    Counter[str],
+    Counter[str],
+]:
+    """返回型号数量、型号对应类型分布、节点状态和设备字段来源。"""
 
     models: Counter[str] = Counter()
+    model_type_counts: dict[str, Counter[str]] = defaultdict(Counter)
     node_states: Counter[str] = Counter()
     device_fields: Counter[str] = Counter()
     nodes = graph.get("nodes")
     if not isinstance(nodes, list):
         node_states["nodes-not-list"] += 1
-        return models, node_states, device_fields
+        return models, model_type_counts, node_states, device_fields
 
     for node in nodes:
         node_states["total-nodes"] += 1
@@ -116,9 +131,11 @@ def analyze_graph(
         if model is None:
             node_states["missing-or-empty-model"] += 1
             continue
+        device_type = normalized_device_type(device.get("TYPE"))
         models[model] += 1
+        model_type_counts[model][device_type] += 1
         node_states["valid-model-nodes"] += 1
-    return models, node_states, device_fields
+    return models, model_type_counts, node_states, device_fields
 
 
 def ordered_counts(counter: Counter[str]) -> dict[str, int]:
@@ -133,6 +150,46 @@ def write_errors(path: Path, rows: list[dict[str, str]]) -> None:
         writer.writerows(rows)
 
 
+def update_model_type_counts(
+    target: dict[str, Counter[str]],
+    source: dict[str, Counter[str]],
+) -> None:
+    for model, type_counts in source.items():
+        target[model].update(type_counts)
+
+
+def write_model_counts(
+    path: Path,
+    model_counts: Counter[str],
+    model_type_counts: dict[str, Counter[str]],
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rows = []
+    for model, count in sorted(
+        model_counts.items(), key=lambda item: (-item[1], item[0])
+    ):
+        type_counts = ordered_counts(model_type_counts.get(model, Counter()))
+        if sum(type_counts.values()) != count:
+            raise AssertionError(f"MODEL={model!r} 的 TYPE 分布数量与总数不一致")
+        rows.append(
+            {
+                "model": model,
+                "count": count,
+                "device_type_counts": json.dumps(
+                    type_counts,
+                    ensure_ascii=False,
+                ),
+            }
+        )
+    with path.open("w", encoding="utf-8-sig", newline="") as file:
+        writer = csv.DictWriter(
+            file,
+            fieldnames=["model", "count", "device_type_counts"],
+        )
+        writer.writeheader()
+        writer.writerows(rows)
+
+
 def run(args: argparse.Namespace) -> None:
     dataset_root = args.dataset_root.resolve()
     output_dir = args.output_dir.resolve()
@@ -140,6 +197,7 @@ def run(args: argparse.Namespace) -> None:
     splits = ["train", "val"] if args.split == "all" else [args.split]
 
     model_counts: Counter[str] = Counter()
+    model_type_counts: dict[str, Counter[str]] = defaultdict(Counter)
     node_states: Counter[str] = Counter()
     device_field_counts: Counter[str] = Counter()
     errors: list[dict[str, str]] = []
@@ -148,6 +206,7 @@ def run(args: argparse.Namespace) -> None:
     for split in splits:
         files = iter_json_files(dataset_root, split)
         split_models: Counter[str] = Counter()
+        split_model_types: dict[str, Counter[str]] = defaultdict(Counter)
         split_states: Counter[str] = Counter()
         split_device_fields: Counter[str] = Counter()
         split_error_count = 0
@@ -158,8 +217,14 @@ def run(args: argparse.Namespace) -> None:
             source_file = str(path.relative_to(dataset_root / split))
             try:
                 graph = load_json_object(path)
-                graph_models, graph_states, graph_device_fields = analyze_graph(graph)
+                (
+                    graph_models,
+                    graph_model_types,
+                    graph_states,
+                    graph_device_fields,
+                ) = analyze_graph(graph)
                 split_models.update(graph_models)
+                update_model_type_counts(split_model_types, graph_model_types)
                 split_states.update(graph_states)
                 split_device_fields.update(graph_device_fields)
             except Exception as error:  # noqa: BLE001 - 坏文件单独记录并继续。
@@ -186,6 +251,7 @@ def run(args: argparse.Namespace) -> None:
                 )
 
         model_counts.update(split_models)
+        update_model_type_counts(model_type_counts, split_model_types)
         node_states.update(split_states)
         device_field_counts.update(split_device_fields)
         by_split[split] = {
@@ -200,7 +266,6 @@ def run(args: argparse.Namespace) -> None:
             "device_field_counts": ordered_counts(split_device_fields),
         }
 
-    counts = ordered_counts(model_counts)
     summary = {
         "dataset_root": str(dataset_root),
         "output_dir": str(output_dir),
@@ -219,9 +284,13 @@ def run(args: argparse.Namespace) -> None:
         "by_split": by_split,
     }
 
-    (output_dir / MODEL_COUNTS_FILE).write_text(
-        json.dumps(counts, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
+    legacy_counts_path = output_dir / LEGACY_MODEL_COUNTS_FILE
+    if legacy_counts_path.is_file():
+        legacy_counts_path.unlink()
+    write_model_counts(
+        output_dir / MODEL_COUNTS_FILE,
+        model_counts,
+        model_type_counts,
     )
     (output_dir / SUMMARY_FILE).write_text(
         json.dumps(summary, ensure_ascii=False, indent=2) + "\n",
@@ -234,7 +303,7 @@ def run(args: argparse.Namespace) -> None:
         f"共 {summary['unique_models']} 种 MODEL，错误文件 {len(errors)} 个",
         flush=True,
     )
-    print(f"型号字典：{output_dir / MODEL_COUNTS_FILE}", flush=True)
+    print(f"型号统计：{output_dir / MODEL_COUNTS_FILE}", flush=True)
 
 
 if __name__ == "__main__":
