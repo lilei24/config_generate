@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """构造按物理设备类型统计设备名称的任务数据集。
 
-每张原始拓扑生成一个样本。标准答案使用 nodes[].devices.TYPE 动态分组，
-并收集对应的 nodes[].devices.NAME；逻辑角色 topologyNode.DEVICEROLE 不参与统计。
+每张原始拓扑生成一个样本。标准答案使用 nodes[].devices.TYPE（兼容历史字段
+nodes[].device.TYPE）动态分组，并收集对应的 NAME；逻辑角色不参与统计。
 一次运行同步生成 with_answer 和 without_answer 两套数据集。
 """
 
@@ -96,6 +96,34 @@ def nonempty_string(value: Any) -> str | None:
     return normalized or None
 
 
+def get_complete_device(
+    node: dict[str, Any],
+) -> tuple[str | None, str | None, str | None, bool]:
+    """读取完整设备信息，优先使用原始数据常见的 devices 字段。"""
+
+    objects: list[tuple[str, dict[str, Any]]] = []
+    for field_name in ("devices", "device"):
+        value = node.get(field_name)
+        if isinstance(value, dict):
+            objects.append((field_name, value))
+
+    for field_name, device in objects:
+        device_type = nonempty_string(device.get("TYPE"))
+        device_name = nonempty_string(device.get("NAME"))
+        if device_type is not None and device_name is not None:
+            return device_type, device_name, field_name, True
+
+    if not objects:
+        return None, None, None, False
+    field_name, device = objects[0]
+    return (
+        nonempty_string(device.get("TYPE")),
+        nonempty_string(device.get("NAME")),
+        field_name,
+        True,
+    )
+
+
 def collect_device_statistics(
     graph: dict[str, Any],
 ) -> tuple[dict[str, list[str]] | None, dict[str, Any], str]:
@@ -111,19 +139,20 @@ def collect_device_statistics(
     invalid_reasons: Counter[str] = Counter()
     invalid_node_indexes: list[int] = []
     all_names: list[str] = []
+    device_field_counts: Counter[str] = Counter()
 
     for node_index, node in enumerate(nodes):
         if not isinstance(node, dict):
             invalid_reasons["node-not-object"] += 1
             invalid_node_indexes.append(node_index)
             continue
-        devices = node.get("devices")
-        if not isinstance(devices, dict):
-            invalid_reasons["devices-not-object"] += 1
+        device_type, device_name, field_name, has_device_object = (
+            get_complete_device(node)
+        )
+        if not has_device_object:
+            invalid_reasons["devices-or-device-not-object"] += 1
             invalid_node_indexes.append(node_index)
             continue
-        device_type = nonempty_string(devices.get("TYPE"))
-        device_name = nonempty_string(devices.get("NAME"))
         if device_type is None:
             invalid_reasons["missing-or-empty-device-type"] += 1
         if device_name is None:
@@ -131,6 +160,9 @@ def collect_device_statistics(
         if device_type is None or device_name is None:
             invalid_node_indexes.append(node_index)
             continue
+        if field_name is None:
+            raise AssertionError("完整设备信息必须有来源字段")
+        device_field_counts[field_name] += 1
         names_by_type[device_type].append(device_name)
         all_names.append(device_name)
 
@@ -140,6 +172,7 @@ def collect_device_statistics(
         "invalid_node_count": len(invalid_node_indexes),
         "invalid_node_indexes": invalid_node_indexes,
         "invalid_reasons": dict(sorted(invalid_reasons.items())),
+        "device_field_counts": dict(sorted(device_field_counts.items())),
     }
     if invalid_node_indexes:
         return None, counters, "node-missing-complete-device-type-or-name"
@@ -184,8 +217,8 @@ def build_task_graph(
         "task_name": "device_type_statistics",
         "split": split,
         "source_file": source_file,
-        "classification_field": "nodes[].devices.TYPE",
-        "device_name_field": "nodes[].devices.NAME",
+        "classification_field": "nodes[].devices.TYPE or nodes[].device.TYPE",
+        "device_name_field": "nodes[].devices.NAME or nodes[].device.NAME",
         "samples_per_graph": 1,
     }
     return task_graph
@@ -249,8 +282,8 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
         "dataset_root": str(dataset_root),
         "output_root": str(output_root),
         "samples_per_graph": 1,
-        "classification_field": "nodes[].devices.TYPE",
-        "device_name_field": "nodes[].devices.NAME",
+        "classification_field": "nodes[].devices.TYPE or nodes[].device.TYPE",
+        "device_name_field": "nodes[].devices.NAME or nodes[].device.NAME",
         "strict_complete_device_fields": True,
         "splits": {},
     }
