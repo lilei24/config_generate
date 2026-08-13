@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""构造单节点一阶邻居与全部可达节点任务数据集。
+"""构造从单个目标节点出发查找全部可达叶子节点的任务数据集。
 
 每张原始拓扑使用固定随机种子选择一个合法节点。物理链路统一按无向图处理，
-标准答案包含去重、排序后的一阶邻居节点 ID 和同一连通分量内的其他节点 ID。
+叶子节点定义为无向简单图中邻居数量等于 1 的节点，答案不包含目标节点自身。
 一次运行同步生成 with_answer 和 without_answer 两套数据集。
 """
 
@@ -30,43 +30,33 @@ STATS_FILE = "node_neighborhood_reachability_stats.csv"
 SUMMARY_FILE = "build_summary.json"
 ISSUES_FILE = "build_issues.jsonl"
 
-QUESTION_TEMPLATE = """请根据给定的无向物理网络拓扑，分析目标节点 ID：{target_node_id}。
-
-你需要输出：
-
-1. one_hop_neighbor_node_ids：与目标节点直接通过一条物理链路连接的全部一阶邻居节点 ID。
-2. reachable_node_ids：从目标节点出发，经过一条或多条物理链路能够到达的全部节点 ID。
+QUESTION_TEMPLATE = """请根据给定的无向物理网络拓扑，查找从目标节点 ID {target_node_id} 出发能够到达的所有叶子节点。
 
 要求：
-- 两个列表都不能包含目标节点 {target_node_id} 自身；
-- reachable_node_ids 必须包含全部一阶邻居和全部间接可达节点；
+- 本任务中的叶子节点是指在整张无向拓扑图中仅连接一条物理链路的节点，即节点度数为 1；
+- 结果不能包含目标节点 {target_node_id} 自身；
 - 不在目标节点所属连通分量中的节点不能输出；
 - 节点必须使用 nodes[].id，不能使用设备名称；
-- 每个节点 ID 在同一个列表中只能出现一次，不能重复；
-- 同一对节点之间存在多条链路时，对应邻居节点仍然只输出一次；
-- 两个列表中的节点 ID 按字典序从小到大排列；
+- 同一对节点之间存在多条链路时，只视为一个邻居关系；
+- 节点 ID 不能重复，并按字典序从小到大排列；
 - 不要输出解释、Markdown 代码块或其他字段，只输出一个合法 JSON 对象。
 
 实际示例：
 
-假设拓扑为 NODE_A--NODE_B--NODE_C，并且 NODE_B--NODE_D，NODE_E 与它们不连通。当目标节点为 NODE_A 时，正确输出为：
+假设拓扑为 NODE_A--NODE_B--NODE_C，并且 NODE_B--NODE_D，NODE_E 与它们不连通。当目标节点为 NODE_B 时，正确输出为：
 
 {{
-  "one_hop_neighbor_node_ids": [
-    "NODE_B"
-  ],
-  "reachable_node_ids": [
-    "NODE_B",
+  "reachable_leaf_node_ids": [
+    "NODE_A",
     "NODE_C",
     "NODE_D"
   ]
 }}
 
-如果目标节点是孤立节点，正确输出为：
+如果没有可达的叶子节点，正确输出为：
 
 {{
-  "one_hop_neighbor_node_ids": [],
-  "reachable_node_ids": []
+  "reachable_leaf_node_ids": []
 }}"""
 
 
@@ -216,8 +206,7 @@ def reachable_node_ids(
 def build_task_graph(
     graph: dict[str, Any],
     target_node_id: str,
-    one_hop_ids: list[str],
-    reachable_ids: list[str],
+    reachable_leaf_ids: list[str],
     split: str,
     source_file: str,
 ) -> dict[str, Any]:
@@ -230,14 +219,15 @@ def build_task_graph(
         target_node_id=target_node_id
     )
     task_graph["task_answer"] = {
-        "one_hop_neighbor_node_ids": one_hop_ids,
-        "reachable_node_ids": reachable_ids,
+        "reachable_leaf_node_ids": reachable_leaf_ids,
     }
     task_graph["task_metadata"] = {
-        "task_name": "node_neighborhood_and_reachability",
+        "task_name": "reachable_leaf_nodes",
         "split": split,
         "source_file": source_file,
         "graph_policy": "undirected_physical_topology",
+        "leaf_policy": "unique_neighbor_degree_equals_one",
+        "exclude_target_node": True,
         "samples_per_graph": 1,
     }
     return task_graph
@@ -265,8 +255,8 @@ def write_stats(path: Path, rows: list[dict[str, Any]]) -> None:
         "target_node_id",
         "node_count",
         "valid_link_count",
-        "one_hop_neighbor_count",
         "reachable_node_count",
+        "reachable_leaf_node_count",
         "connected_component_size",
         "is_isolated",
     ]
@@ -300,6 +290,8 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
         "seed": args.seed,
         "samples_per_graph": 1,
         "graph_policy": "undirected_physical_topology",
+        "leaf_policy": "unique_neighbor_degree_equals_one",
+        "exclude_target_node": True,
         "splits": {},
     }
 
@@ -312,8 +304,8 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
             "input_files": len(files),
             "generated_files": 0,
             "skipped_files": 0,
-            "isolated_target_samples": 0,
-            "connected_target_samples": 0,
+            "samples_with_reachable_leaf": 0,
+            "samples_without_reachable_leaf": 0,
             "skip_reasons": {},
             "ignored_node_reasons": {},
             "ignored_link_reasons": {},
@@ -353,16 +345,17 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
                 )
                 ignored_link_reasons.update(link_reasons)
                 target_node_id = rng.choice(node_ids)
-                one_hop_ids = sorted(adjacency[target_node_id])
                 reachable_ids = reachable_node_ids(adjacency, target_node_id)
-                if not set(one_hop_ids).issubset(reachable_ids):
-                    raise AssertionError("一阶邻居必须属于可达节点集合")
+                reachable_leaf_ids = sorted(
+                    node_id
+                    for node_id in reachable_ids
+                    if len(adjacency[node_id]) == 1
+                )
 
                 task_graph = build_task_graph(
                     graph,
                     target_node_id,
-                    one_hop_ids,
-                    reachable_ids,
+                    reachable_leaf_ids,
                     split,
                     str(relative_path),
                 )
@@ -373,12 +366,12 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
                 hidden_graph.pop("task_answer", None)
                 write_json(without_path, hidden_graph, args.indent)
 
-                is_isolated = not one_hop_ids
+                is_isolated = not adjacency[target_node_id]
                 split_summary["generated_files"] += 1
                 split_summary[
-                    "isolated_target_samples"
-                    if is_isolated
-                    else "connected_target_samples"
+                    "samples_with_reachable_leaf"
+                    if reachable_leaf_ids
+                    else "samples_without_reachable_leaf"
                 ] += 1
                 stats_rows.append(
                     {
@@ -388,8 +381,8 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
                         "target_node_id": target_node_id,
                         "node_count": len(node_ids),
                         "valid_link_count": valid_link_count,
-                        "one_hop_neighbor_count": len(one_hop_ids),
                         "reachable_node_count": len(reachable_ids),
+                        "reachable_leaf_node_count": len(reachable_leaf_ids),
                         "connected_component_size": len(reachable_ids) + 1,
                         "is_isolated": is_isolated,
                     }
