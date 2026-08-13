@@ -51,12 +51,6 @@ QUESTION_TEMPLATE = """请根据给定的无向物理网络拓扑，查找从目
     "NODE_C",
     "NODE_D"
   ]
-}}
-
-如果没有可达的叶子节点，正确输出为：
-
-{{
-  "reachable_leaf_node_ids": []
 }}"""
 
 
@@ -305,7 +299,6 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
             "generated_files": 0,
             "skipped_files": 0,
             "samples_with_reachable_leaf": 0,
-            "samples_without_reachable_leaf": 0,
             "skip_reasons": {},
             "ignored_node_reasons": {},
             "ignored_link_reasons": {},
@@ -351,42 +344,58 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
                     for node_id in reachable_ids
                     if len(adjacency[node_id]) == 1
                 )
+                if not reachable_leaf_ids:
+                    reason = "no-reachable-leaf-node"
+                    skip_reasons[reason] += 1
+                    append_issue(
+                        issue_path,
+                        {
+                            "split": split,
+                            "source_file": str(relative_path),
+                            "issue": reason,
+                            "detail": {
+                                "target_node_id": target_node_id,
+                                "reachable_node_count": len(reachable_ids),
+                                "connected_component_size": len(reachable_ids) + 1,
+                                "is_isolated": not adjacency[target_node_id],
+                            },
+                        },
+                    )
+                else:
+                    task_graph = build_task_graph(
+                        graph,
+                        target_node_id,
+                        reachable_leaf_ids,
+                        split,
+                        str(relative_path),
+                    )
+                    with_path = (
+                        output_root / WITH_ANSWER_DIR / split / relative_path
+                    )
+                    without_path = (
+                        output_root / WITHOUT_ANSWER_DIR / split / relative_path
+                    )
+                    write_json(with_path, task_graph, args.indent)
+                    hidden_graph = copy.deepcopy(task_graph)
+                    hidden_graph.pop("task_answer", None)
+                    write_json(without_path, hidden_graph, args.indent)
 
-                task_graph = build_task_graph(
-                    graph,
-                    target_node_id,
-                    reachable_leaf_ids,
-                    split,
-                    str(relative_path),
-                )
-                with_path = output_root / WITH_ANSWER_DIR / split / relative_path
-                without_path = output_root / WITHOUT_ANSWER_DIR / split / relative_path
-                write_json(with_path, task_graph, args.indent)
-                hidden_graph = copy.deepcopy(task_graph)
-                hidden_graph.pop("task_answer", None)
-                write_json(without_path, hidden_graph, args.indent)
-
-                is_isolated = not adjacency[target_node_id]
-                split_summary["generated_files"] += 1
-                split_summary[
-                    "samples_with_reachable_leaf"
-                    if reachable_leaf_ids
-                    else "samples_without_reachable_leaf"
-                ] += 1
-                stats_rows.append(
-                    {
-                        "split": split,
-                        "source_file": str(relative_path),
-                        "output_file": str(with_path.relative_to(output_root)),
-                        "target_node_id": target_node_id,
-                        "node_count": len(node_ids),
-                        "valid_link_count": valid_link_count,
-                        "reachable_node_count": len(reachable_ids),
-                        "reachable_leaf_node_count": len(reachable_leaf_ids),
-                        "connected_component_size": len(reachable_ids) + 1,
-                        "is_isolated": is_isolated,
-                    }
-                )
+                    split_summary["generated_files"] += 1
+                    split_summary["samples_with_reachable_leaf"] += 1
+                    stats_rows.append(
+                        {
+                            "split": split,
+                            "source_file": str(relative_path),
+                            "output_file": str(with_path.relative_to(output_root)),
+                            "target_node_id": target_node_id,
+                            "node_count": len(node_ids),
+                            "valid_link_count": valid_link_count,
+                            "reachable_node_count": len(reachable_ids),
+                            "reachable_leaf_node_count": len(reachable_leaf_ids),
+                            "connected_component_size": len(reachable_ids) + 1,
+                            "is_isolated": False,
+                        }
+                    )
 
             if args.progress_interval > 0 and (
                 file_index % args.progress_interval == 0 or file_index == len(files)
