@@ -28,12 +28,14 @@ STATS_FILE = "device_type_statistics.csv"
 SUMMARY_FILE = "build_summary.json"
 ISSUES_FILE = "build_issues.jsonl"
 
-TASK_QUESTION = """请按物理设备类型统计该网络拓扑中的所有设备，并列出每种类型对应的设备名称。不要按设备的逻辑角色分类，仅输出拓扑中实际存在的设备类型。
+TASK_QUESTION = """统计这个组网拓扑中存在的设备类型，设备类型包括（AP、LSW、AR、FW、AC），并列出每种类型对应的设备名称。
 请以 JSON 对象形式输出，例如：
 {
   "AP": ["AP_1", "AP_2"],
   "LSW": ["SW_1", "SW_2"],
-  "FW": ["FW_1"]
+  "AR": ["AR_1"],
+  "FW": ["FW_1"],
+  "AC": ["AC1"]
 }"""
 
 
