@@ -208,6 +208,21 @@ def raw_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
+def contains_all_vlan(value: Any) -> bool:
+    """判断 VLAN 表达式中是否包含独立的 all 通配值。"""
+
+    if isinstance(value, str):
+        return any(
+            token.strip().lower() == "all"
+            for token in re.split(r"[,，]", value)
+        )
+    if isinstance(value, list):
+        return any(contains_all_vlan(item) for item in value)
+    if isinstance(value, dict):
+        return any(contains_all_vlan(item) for item in value.values())
+    return False
+
+
 def analyze_node(
     node: dict[str, Any],
     config_fields: list[str],
@@ -246,6 +261,9 @@ def analyze_node(
                         )
                     )
 
+    if any(contains_all_vlan(value) for _, value in allow_values):
+        counters["nodes-skipped-allow-through-vlan-all"] += 1
+        return None, counters
     if not target_containers:
         counters["nodes-without-lsw-gvlan-business"] += 1
         return None, counters
@@ -256,7 +274,7 @@ def analyze_node(
             target_values.extend(
                 collect_named_values(
                     container,
-                    "vlan-id",
+                    "vlan",
                     f"lsw-gvlan-business[{target_index}]",
                 )
             )
@@ -288,12 +306,17 @@ def analyze_node(
     status = "parse-error" if parse_errors else (
         "matched" if target_ids == expected_ids else "mismatched"
     )
+    target_raw = (
+        target_containers[0]
+        if len(target_containers) == 1
+        else target_containers
+    )
     counters[status] += 1
     return (
         {
             "status": status,
             "is_equal": "" if parse_errors else target_ids == expected_ids,
-            "lsw_gvlan_business_raw": raw_json(target_containers),
+            "lsw_gvlan_business_raw": raw_json(target_raw),
             "target_vlan_ids": sorted_vlan_text(target_ids),
             "allow_through_vlan_ids": sorted_vlan_text(allow_ids),
             "lsw_interfaces_vlan_ids": sorted_vlan_text(interface_vlan_ids),
@@ -381,6 +404,9 @@ def split_summary(
         ],
         "nodes_without_lsw_gvlan_business": counters[
             "nodes-without-lsw-gvlan-business"
+        ],
+        "nodes_skipped_allow_through_vlan_all": counters[
+            "nodes-skipped-allow-through-vlan-all"
         ],
         "compared_nodes": compared,
         "matched_nodes": counters["matched"],
@@ -471,9 +497,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "splits": splits,
         "config_fields": args.config_fields,
         "comparison_rule": (
-            "union(recursive vlan-id fields in lsw-gvlan-business) == "
+            "union(recursive vlan fields in lsw-gvlan-business) == "
             "union(lsw-interface[].allow-through-vlan, "
             "lsw-interfaces[].vlan-id) per node"
+        ),
+        "allow_through_vlan_all_rule": (
+            "skip the node when any allow-through-vlan contains all"
         ),
         "empty_lsw_gvlan_business_rule": "{} or [] represents an empty VLAN set",
         "missing_source_field_rule": "missing source fields represent empty sets",
