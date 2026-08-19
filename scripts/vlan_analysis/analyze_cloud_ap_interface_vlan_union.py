@@ -26,7 +26,7 @@ SUMMARY_FILE = "cloud_ap_interface_vlan_union_summary.json"
 ERROR_FILE = "analysis_errors.csv"
 
 REQUIRED_VLAN_FIELDS = (
-    "process-vlan-id",
+    "process-vlan[].process-vlan-id",
     "sw-vlan-id",
     "trunk-vlan",
 )
@@ -189,20 +189,65 @@ def raw_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
+def extract_process_vlan_values(
+    interface: dict[str, Any],
+) -> tuple[list[Any], list[str], bool]:
+    """提取 process-vlan 容器中的全部 process-vlan-id 原始值。"""
+
+    if "process-vlan" not in interface:
+        return [], [], False
+    container = interface["process-vlan"]
+    if isinstance(container, dict):
+        items: list[Any] = [container]
+    elif isinstance(container, list):
+        items = container
+    else:
+        return [], [f"process-vlan:unsupported-type:{type(container).__name__}"], False
+
+    values: list[Any] = []
+    errors: list[str] = []
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            errors.append(
+                f"process-vlan[{index}]:unsupported-type:{type(item).__name__}"
+            )
+            continue
+        if "process-vlan-id" not in item:
+            errors.append(f"process-vlan[{index}]:missing-process-vlan-id")
+            continue
+        values.append(item["process-vlan-id"])
+    return values, errors, bool(values)
+
+
 def interface_row(
     location: InterfaceLocation,
     interface: dict[str, Any],
     max_range_size: int,
 ) -> tuple[dict[str, Any] | None, str, dict[str, int]]:
-    missing_fields = [
-        field for field in REQUIRED_VLAN_FIELDS if field not in interface
-    ]
+    process_values, process_structure_errors, has_process_vlan_ids = (
+        extract_process_vlan_values(interface)
+    )
+    missing_fields = []
+    if not has_process_vlan_ids:
+        missing_fields.append("process-vlan[].process-vlan-id")
+    missing_fields.extend(
+        field for field in ("sw-vlan-id", "trunk-vlan") if field not in interface
+    )
     if missing_fields:
         return None, "missing-fields", {field: 1 for field in missing_fields}
 
-    process_ids, process_errors = parse_vlan_value(
-        interface["process-vlan-id"], max_range_size
-    )
+    process_ids: set[int] = set()
+    process_errors = list(process_structure_errors)
+    for process_index, process_value in enumerate(process_values):
+        parsed_ids, value_errors = parse_vlan_value(
+            process_value,
+            max_range_size,
+        )
+        process_ids.update(parsed_ids)
+        process_errors.extend(
+            f"process-vlan[{process_index}].process-vlan-id:{error}"
+            for error in value_errors
+        )
     sw_ids, sw_errors = parse_vlan_value(
         interface["sw-vlan-id"], max_range_size
     )
@@ -210,7 +255,7 @@ def interface_row(
         interface["trunk-vlan"], max_range_size
     )
     parse_errors = {
-        "process-vlan-id": process_errors,
+        "process-vlan[].process-vlan-id": process_errors,
         "sw-vlan-id": sw_errors,
         "trunk-vlan": trunk_errors,
     }
@@ -235,7 +280,7 @@ def interface_row(
         "interface_index": location.interface_index,
         "status": status,
         "is_equal": "" if flattened_errors else process_ids == expected_ids,
-        "process_vlan_raw": raw_json(interface["process-vlan-id"]),
+        "process_vlan_raw": raw_json(interface["process-vlan"]),
         "sw_vlan_raw": raw_json(interface["sw-vlan-id"]),
         "trunk_vlan_raw": raw_json(interface["trunk-vlan"]),
         "process_vlan_ids": sorted_vlan_text(process_ids),
@@ -418,7 +463,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "config_fields": args.config_fields,
         "required_vlan_fields": list(REQUIRED_VLAN_FIELDS),
         "comparison_rule": (
-            "process-vlan-id == union(sw-vlan-id, trunk-vlan); "
+            "union(process-vlan[].process-vlan-id) == "
+            "union(sw-vlan-id, trunk-vlan); "
             "only interfaces containing all three fields are candidates"
         ),
         "max_range_size": args.max_range_size,
