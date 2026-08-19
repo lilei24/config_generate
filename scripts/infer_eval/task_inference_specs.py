@@ -14,6 +14,7 @@ from task_batch_inference_common import (
     validate_link_port_answer,
     validate_neighborhood_reachability_answer,
     validate_path_answer,
+    validate_reachable_leaf_nodes_answer,
 )
 
 
@@ -56,6 +57,10 @@ LINK_FAILURE_OUTPUT_EXAMPLES = """输出格式示例 1（故障后仍然连通�
 NEIGHBORHOOD_REACHABILITY_OUTPUT_EXAMPLE = """{
   "one_hop_neighbor_node_ids": ["NODE_B"],
   "reachable_node_ids": ["NODE_B", "NODE_C", "NODE_D"]
+}"""
+
+REACHABLE_LEAF_NODES_OUTPUT_EXAMPLE = """{
+  "reachable_leaf_node_ids": ["NODE_A", "NODE_C", "NODE_D"]
 }"""
 
 
@@ -248,6 +253,40 @@ def build_neighborhood_reachability_opencode_prompt(
     )
 
 
+def build_reachable_leaf_nodes_vllm_prompt(
+    sample: dict[str, Any],
+) -> str:
+    target_node_id = required_string(sample, "task_target_node_id")
+    return f"""请完成输入 JSON 中 task_question 描述的可达叶子节点查找任务。
+
+目标节点 ID：{target_node_id}
+
+要求：
+1. 将 links 表示的物理链路按无向图处理，不使用 source/target 判断方向。
+2. 叶子节点是无向简单图中唯一邻居数量等于 1 的节点。
+3. 同一对节点之间的重复链路只算一个邻居关系。
+4. 只输出目标节点所在连通分量中可达的叶子节点。
+5. 结果不得包含目标节点自身，也不得包含重复节点 ID。
+6. 节点必须使用 nodes[].id，并按字典序排列。
+7. 只输出以下结构的 JSON 对象，不输出解释、代码块或思考过程：
+{REACHABLE_LEAF_NODES_OUTPUT_EXAMPLE}
+
+【完整任务 JSON】
+{compact_json(sample)}
+"""
+
+
+def build_reachable_leaf_nodes_opencode_prompt(
+    site: str,
+    sample: dict[str, Any],
+) -> str:
+    return build_reachable_leaf_nodes_vllm_prompt(sample).replace(
+        "【完整任务 JSON】",
+        f"站点标识：{site}\n\n【完整任务 JSON】",
+        1,
+    )
+
+
 def build_impact_vllm_prompt(sample: dict[str, Any]) -> str:
     return f"""请完成输入 JSON 中 task_question 描述的节点故障 AP 影响面任务。
 
@@ -408,6 +447,18 @@ NODE_NEIGHBORHOOD_REACHABILITY_SPEC = TaskInferenceSpec(
     build_vllm_prompt=build_neighborhood_reachability_vllm_prompt,
     build_opencode_prompt=build_neighborhood_reachability_opencode_prompt,
     validate_answer=validate_neighborhood_reachability_answer,
+)
+
+REACHABLE_LEAF_NODES_SPEC = TaskInferenceSpec(
+    task_name="reachable_leaf_nodes",
+    default_dataset_root=Path("node_neighborhood_reachability_dataset"),
+    default_vllm_output_root=Path("vllm-results/reachable_leaf_nodes"),
+    default_opencode_output_root=Path("opencode-results/reachable_leaf_nodes"),
+    default_model="qwen3-8b",
+    system_prompt=SYSTEM_PROMPT,
+    build_vllm_prompt=build_reachable_leaf_nodes_vllm_prompt,
+    build_opencode_prompt=build_reachable_leaf_nodes_opencode_prompt,
+    validate_answer=validate_reachable_leaf_nodes_answer,
 )
 
 NODE_FAILURE_AP_IMPACT_SPEC = TaskInferenceSpec(

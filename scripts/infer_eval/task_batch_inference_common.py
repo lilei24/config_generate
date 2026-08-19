@@ -1062,6 +1062,13 @@ def validate_neighborhood_reachability_answer(answer: dict[str, Any]) -> None:
         )
 
 
+def validate_reachable_leaf_nodes_answer(answer: dict[str, Any]) -> None:
+    validate_unique_node_id_list(
+        answer.get("reachable_leaf_node_ids"),
+        "reachable_leaf_node_ids",
+    )
+
+
 def validate_ap_impact_answer(answer: dict[str, Any]) -> None:
     ap_ids = answer.get("disconnected_ap_ids")
     if not isinstance(ap_ids, list):
