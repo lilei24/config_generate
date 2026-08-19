@@ -27,9 +27,8 @@ ERROR_FILE = "analysis_errors.csv"
 
 REQUIRED_VLAN_FIELDS = (
     "process-vlan[].process-vlan-id",
-    "sw-vlan-id",
-    "trunk-vlan",
 )
+OPTIONAL_VLAN_FIELDS = ("sw-vlan-id", "trunk-vlan")
 RANGE_PATTERN = re.compile(r"^(\d+)\s*-\s*(\d+)$")
 INTEGER_PATTERN = re.compile(r"^\d+$")
 
@@ -227,14 +226,14 @@ def interface_row(
     process_values, process_structure_errors, has_process_vlan_ids = (
         extract_process_vlan_values(interface)
     )
-    missing_fields = []
+    missing_fields = [
+        field for field in OPTIONAL_VLAN_FIELDS if field not in interface
+    ]
     if not has_process_vlan_ids:
-        missing_fields.append("process-vlan[].process-vlan-id")
-    missing_fields.extend(
-        field for field in ("sw-vlan-id", "trunk-vlan") if field not in interface
-    )
-    if missing_fields:
-        return None, "missing-fields", {field: 1 for field in missing_fields}
+        missing_fields.insert(0, "process-vlan[].process-vlan-id")
+        return None, "missing-process-vlan", {
+            field: 1 for field in missing_fields
+        }
 
     process_ids: set[int] = set()
     process_errors = list(process_structure_errors)
@@ -248,11 +247,17 @@ def interface_row(
             f"process-vlan[{process_index}].process-vlan-id:{error}"
             for error in value_errors
         )
-    sw_ids, sw_errors = parse_vlan_value(
-        interface["sw-vlan-id"], max_range_size
+    sw_present = "sw-vlan-id" in interface
+    trunk_present = "trunk-vlan" in interface
+    sw_ids, sw_errors = (
+        parse_vlan_value(interface["sw-vlan-id"], max_range_size)
+        if sw_present
+        else (set(), [])
     )
-    trunk_ids, trunk_errors = parse_vlan_value(
-        interface["trunk-vlan"], max_range_size
+    trunk_ids, trunk_errors = (
+        parse_vlan_value(interface["trunk-vlan"], max_range_size)
+        if trunk_present
+        else (set(), [])
     )
     parse_errors = {
         "process-vlan[].process-vlan-id": process_errors,
@@ -280,9 +285,11 @@ def interface_row(
         "interface_index": location.interface_index,
         "status": status,
         "is_equal": "" if flattened_errors else process_ids == expected_ids,
+        "sw_vlan_present": sw_present,
+        "trunk_vlan_present": trunk_present,
         "process_vlan_raw": raw_json(interface["process-vlan"]),
-        "sw_vlan_raw": raw_json(interface["sw-vlan-id"]),
-        "trunk_vlan_raw": raw_json(interface["trunk-vlan"]),
+        "sw_vlan_raw": raw_json(interface.get("sw-vlan-id")),
+        "trunk_vlan_raw": raw_json(interface.get("trunk-vlan")),
         "process_vlan_ids": sorted_vlan_text(process_ids),
         "sw_vlan_ids": sorted_vlan_text(sw_ids),
         "trunk_vlan_ids": sorted_vlan_text(trunk_ids),
@@ -291,7 +298,7 @@ def interface_row(
         "missing_process_vlan_ids": sorted_vlan_text(missing_process_ids),
         "parse_errors": json.dumps(flattened_errors, ensure_ascii=False),
     }
-    return row, status, {}
+    return row, status, {field: 1 for field in missing_fields}
 
 
 def analyze_graph(
@@ -431,7 +438,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "cloud_ap_interface_objects": counters[
                 "cloud-ap-interface-objects"
             ],
-            "complete_field_interfaces": (
+            "process_vlan_interfaces": (
                 counters["matched"]
                 + counters["mismatched"]
                 + counters["parse-error"]
@@ -440,7 +447,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "matched_interfaces": counters["matched"],
             "mismatched_interfaces": counters["mismatched"],
             "parse_error_interfaces": counters["parse-error"],
-            "incomplete_field_interfaces": counters["missing-fields"],
+            "missing_process_vlan_interfaces": counters[
+                "missing-process-vlan"
+            ],
             "missing_field_counts": dict(sorted(missing_fields.items())),
             "match_ratio": round(
                 counters["matched"] / compared if compared else 0.0,
@@ -462,10 +471,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "splits": splits,
         "config_fields": args.config_fields,
         "required_vlan_fields": list(REQUIRED_VLAN_FIELDS),
+        "optional_vlan_fields": list(OPTIONAL_VLAN_FIELDS),
         "comparison_rule": (
             "union(process-vlan[].process-vlan-id) == "
             "union(sw-vlan-id, trunk-vlan); "
-            "only interfaces containing all three fields are candidates"
+            "missing sw-vlan-id or trunk-vlan is treated as an empty set"
         ),
         "max_range_size": args.max_range_size,
         "input_files": sum(item["input_files"] for item in by_split.values()),
@@ -474,7 +484,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "cloud_ap_interface_objects": total_counters[
             "cloud-ap-interface-objects"
         ],
-        "complete_field_interfaces": (
+        "process_vlan_interfaces": (
             total_counters["matched"]
             + total_counters["mismatched"]
             + total_counters["parse-error"]
@@ -483,7 +493,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "matched_interfaces": total_counters["matched"],
         "mismatched_interfaces": total_counters["mismatched"],
         "parse_error_interfaces": total_counters["parse-error"],
-        "incomplete_field_interfaces": total_counters["missing-fields"],
+        "missing_process_vlan_interfaces": total_counters[
+            "missing-process-vlan"
+        ],
         "missing_field_counts": dict(sorted(total_missing_fields.items())),
         "match_ratio": round(
             total_counters["matched"] / compared_total if compared_total else 0.0,
@@ -502,6 +514,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "interface_index",
         "status",
         "is_equal",
+        "sw_vlan_present",
+        "trunk_vlan_present",
         "process_vlan_raw",
         "sw_vlan_raw",
         "trunk_vlan_raw",
