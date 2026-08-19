@@ -252,12 +252,11 @@ def analyze_node(
                             f"{base_path}.lsw-interface",
                         )
                     )
-                if "lsw-interfaces" in business:
                     interface_vlan_values.extend(
                         collect_named_values(
-                            business["lsw-interfaces"],
+                            business["lsw-interface"],
                             "vlan-id",
-                            f"{base_path}.lsw-interfaces",
+                            f"{base_path}.lsw-interface",
                         )
                     )
 
@@ -298,7 +297,7 @@ def analyze_node(
     parse_errors = [
         *(f"lsw-gvlan-business:{error}" for error in target_errors),
         *(f"allow-through-vlan:{error}" for error in allow_errors),
-        *(f"lsw-interfaces.vlan-id:{error}" for error in interface_errors),
+        *(f"lsw-interface.vlan-id:{error}" for error in interface_errors),
     ]
     expected_ids = allow_ids | interface_vlan_ids
     extra_target_ids = target_ids - expected_ids
@@ -319,12 +318,12 @@ def analyze_node(
             "lsw_gvlan_business_raw": raw_json(target_raw),
             "target_vlan_ids": sorted_vlan_text(target_ids),
             "allow_through_vlan_ids": sorted_vlan_text(allow_ids),
-            "lsw_interfaces_vlan_ids": sorted_vlan_text(interface_vlan_ids),
+            "lsw_interface_vlan_ids": sorted_vlan_text(interface_vlan_ids),
             "source_union_vlan_ids": sorted_vlan_text(expected_ids),
             "extra_target_vlan_ids": sorted_vlan_text(extra_target_ids),
             "missing_target_vlan_ids": sorted_vlan_text(missing_target_ids),
             "allow_through_vlan_value_count": len(allow_values),
-            "lsw_interfaces_vlan_value_count": len(interface_vlan_values),
+            "lsw_interface_vlan_value_count": len(interface_vlan_values),
             "parse_errors": json.dumps(parse_errors, ensure_ascii=False),
         },
         counters,
@@ -499,7 +498,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "comparison_rule": (
             "union(recursive vlan fields in lsw-gvlan-business) == "
             "union(lsw-interface[].allow-through-vlan, "
-            "lsw-interfaces[].vlan-id) per node"
+            "lsw-interface[].vlan-id) per node"
         ),
         "allow_through_vlan_all_rule": (
             "skip the node when any allow-through-vlan contains all"
@@ -523,12 +522,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "lsw_gvlan_business_raw",
             "target_vlan_ids",
             "allow_through_vlan_ids",
-            "lsw_interfaces_vlan_ids",
+            "lsw_interface_vlan_ids",
             "source_union_vlan_ids",
             "extra_target_vlan_ids",
             "missing_target_vlan_ids",
             "allow_through_vlan_value_count",
-            "lsw_interfaces_vlan_value_count",
+            "lsw_interface_vlan_value_count",
             "parse_errors",
         ],
         all_rows,
