@@ -18,6 +18,7 @@ DEFAULT_CONFIG_FIELDS = ("configs",)
 DEFAULT_PROGRESS_INTERVAL = 100
 
 LSW_TYPE = "LSW"
+REJECTED_LINK_PREFIX = "rejected-link:"
 
 
 def parse_args() -> argparse.Namespace:
@@ -206,16 +207,23 @@ def analyze_graph(
     for link_index, link in enumerate(links):
         if not isinstance(link, dict):
             counters["invalid-link-items"] += 1
+            counters[f"{REJECTED_LINK_PREFIX}invalid-link-item"] += 1
             continue
         source_id = scalar_text(link.get("source"))
         target_id = scalar_text(link.get("target"))
+        if source_id is not None and source_id == target_id:
+            counters["self-loop-links"] += 1
+            counters[f"{REJECTED_LINK_PREFIX}self-loop"] += 1
+            continue
         source_node = node_by_id.get(source_id or "")
         target_node = node_by_id.get(target_id or "")
         if source_node is None or target_node is None:
             counters["links-with-unresolved-endpoints"] += 1
+            counters[f"{REJECTED_LINK_PREFIX}unresolved-endpoint"] += 1
             continue
         if not (is_lsw_node(source_node) and is_lsw_node(target_node)):
             counters["non-lsw-to-lsw-links"] += 1
+            counters[f"{REJECTED_LINK_PREFIX}not-lsw-to-lsw"] += 1
             continue
 
         link_attributes = link.get("link")
@@ -241,6 +249,13 @@ def analyze_graph(
             counters["links-with-both-interfaces-matched"] += 1
         else:
             counters["links-with-incomplete-interface-match"] += 1
+            rejection_reason = (
+                "interface-match:"
+                f"left={left['interface_match_status']},"
+                f"right={right['interface_match_status']}"
+            )
+            counters[f"{REJECTED_LINK_PREFIX}{rejection_reason}"] += 1
+            continue
 
         records.append(
             {
@@ -256,7 +271,15 @@ def analyze_graph(
     return records, counters
 
 
-def counter_summary(counters: Counter[str]) -> dict[str, int]:
+def rejected_link_categories(counters: Counter[str]) -> dict[str, int]:
+    return {
+        key[len(REJECTED_LINK_PREFIX):]: count
+        for key, count in sorted(counters.items())
+        if key.startswith(REJECTED_LINK_PREFIX) and count
+    }
+
+
+def counter_summary(counters: Counter[str]) -> dict[str, Any]:
     keys = (
         "input-files",
         "valid-files",
@@ -265,6 +288,7 @@ def counter_summary(counters: Counter[str]) -> dict[str, int]:
         "lsw-to-lsw-links",
         "links-with-both-interfaces-matched",
         "links-with-incomplete-interface-match",
+        "self-loop-links",
         "left-matched",
         "left-multiple-matches",
         "left-interface-not-found",
@@ -282,7 +306,14 @@ def counter_summary(counters: Counter[str]) -> dict[str, int]:
         "files-with-nodes-not-list",
         "files-with-links-not-list",
     )
-    return {key.replace("-", "_"): counters[key] for key in keys}
+    summary: dict[str, Any] = {
+        key.replace("-", "_"): counters[key] for key in keys
+    }
+    categories = rejected_link_categories(counters)
+    summary["retained_records"] = counters["links-with-both-interfaces-matched"]
+    summary["rejected_links"] = sum(categories.values())
+    summary["rejected_link_categories"] = categories
+    return summary
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
@@ -292,7 +323,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     all_records: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
     total_counters: Counter[str] = Counter()
-    by_split: dict[str, dict[str, int]] = {}
+    by_split: dict[str, dict[str, Any]] = {}
 
     for split in splits:
         split_root = dataset_root / split
@@ -348,6 +379,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "config_fields": args.config_fields,
         "matching_rule": {
             "link_filter": "both endpoint devices.TYPE values equal LSW",
+            "self_loop_rule": "discard links whose source equals target",
+            "record_rule": "retain only links with exactly one match at both ends",
             "left_endpoint": "link.source + link.link.LEFTPORT",
             "right_endpoint": "link.target + link.link.RIGHTPORT",
             "interface_field": (
