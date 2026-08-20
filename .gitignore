@@ -1,6 +1,7 @@
 .agents/
 .codex/
 agent/
+doc/
 .temp/
 config_generation_dataset/
 shortest_path_dataset/
