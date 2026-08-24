@@ -19,6 +19,7 @@ opencode-harness-workspace/
 vllm-results/
 vlan-llm-analysis/
 vlan-config-analysis/
+vlan-inference-visualizations/
 vlan_constrained_shortest_path_dataset/
 network-business-analysis/
 QA/
