@@ -1027,6 +1027,13 @@ def validate_path_answer(answer: dict[str, Any]) -> None:
             raise ValueError(f"paths[{index}] 与 path_length 不一致")
 
 
+def validate_vlan_path_answer(answer: dict[str, Any]) -> None:
+    vlan_id = answer.get("vlan_id")
+    if isinstance(vlan_id, bool) or not isinstance(vlan_id, int):
+        raise ValueError("vlan_id 必须是整数")
+    validate_path_answer(answer)
+
+
 def validate_link_failure_answer(answer: dict[str, Any]) -> None:
     connected = answer.get("connected")
     path_length = answer.get("path_length")

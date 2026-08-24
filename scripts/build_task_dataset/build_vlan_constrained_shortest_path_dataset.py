@@ -7,7 +7,6 @@ import argparse
 import copy
 import csv
 import json
-import random
 import re
 from collections import Counter, deque
 from dataclasses import dataclass
@@ -17,9 +16,7 @@ from typing import Any, Iterable, Optional
 
 DEFAULT_DATASET_ROOT = Path("datasets")
 DEFAULT_OUTPUT_ROOT = Path("vlan_constrained_shortest_path_dataset")
-DEFAULT_RANDOM_SEED = 20260824
 DEFAULT_SPLITS = ("train", "val")
-DEFAULT_SAMPLES_PER_GRAPH = 3
 DEFAULT_MAX_ANSWER_PATHS = 1000
 DEFAULT_MAX_RANGE_SIZE = 4096
 DEFAULT_PROGRESS_INTERVAL = 100
@@ -35,20 +32,11 @@ RANGE_PATTERN = re.compile(r"^(\d+)\s*-\s*(\d+)$")
 INTEGER_PATTERN = re.compile(r"^\d+$")
 VlanSupport = Optional[frozenset[int]]
 
-QUESTION_TEMPLATE = """请根据给定的无向物理网络拓扑和交换机接口配置，查找 LSW 节点 ID {source_node_id} 到 LSW 节点 ID {target_node_id} 在 VLAN {vlan_id} 下能够端到端通过的全部最短路径。
+QUESTION_TEMPLATE = """请根据交换机配置，查找 LSW 节点 {source_node_id} 和节点 {target_node_id} 在 VLAN {vlan_id} 下能够端到端通过的最短路径。
 
-要求：
-- 路径中的节点使用 nodes[].id；
-- 对每条链路，link.source 使用 LEFTPORT，link.target 使用 RIGHTPORT；
-- 端口名称与 lsw-interfaces-business.lsw-interface[].interface-name 对应；
-- 路径上的每条链路两端接口都必须允许 VLAN {vlan_id} 通过；
-- allow-through-vlan 中的 all 表示允许所有 VLAN，1-5 表示 VLAN 1、2、3、4、5；
-- path_length 是链路跳数，即路径节点数减一；
-- 如果存在多条等长的最短合法路径，必须全部输出；
-- paths 中不能包含重复路径，并按节点 ID 序列的字典序排列；
-- 不要输出解释、Markdown 代码块或其他字段，只输出一个合法 JSON 对象。
+如果存在多条等长最短路径，请全部输出。路径使用 nodes[].id，path_length 表示链路跳数。只输出 JSON 对象。
 
-输出示例：
+示例：
 
 {{
   "vlan_id": {vlan_id},
@@ -94,18 +82,6 @@ def parse_args() -> argparse.Namespace:
         help="处理的数据划分，默认: train val",
     )
     parser.add_argument(
-        "--seed",
-        type=int,
-        default=DEFAULT_RANDOM_SEED,
-        help="固定随机种子，默认: %(default)s",
-    )
-    parser.add_argument(
-        "--samples-per-graph",
-        type=int,
-        default=DEFAULT_SAMPLES_PER_GRAPH,
-        help="每张图最多构造的样本数，默认: %(default)s",
-    )
-    parser.add_argument(
         "--max-answer-paths",
         type=int,
         default=DEFAULT_MAX_ANSWER_PATHS,
@@ -131,8 +107,6 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--indent", type=int, default=2)
     args = parser.parse_args()
-    if args.samples_per_graph <= 0:
-        parser.error("--samples-per-graph 必须大于 0")
     if args.max_answer_paths <= 0:
         parser.error("--max-answer-paths 必须大于 0")
     if args.max_range_size <= 0:
@@ -491,7 +465,6 @@ def restore_paths(
 def collect_candidates(
     graph: dict[str, Any],
     args: argparse.Namespace,
-    rng: random.Random,
 ) -> tuple[list[Candidate], dict[str, Any], str]:
     base_adjacency, edge_supports, vlan_ids, counters, reason = build_strict_graphs(
         graph,
@@ -501,17 +474,14 @@ def collect_candidates(
     if reason:
         return [], dict(counters), reason
 
-    vlan_order = sorted(vlan_ids)
-    rng.shuffle(vlan_order)
     base_tree_cache: dict[str, dict[str, int]] = {}
-    candidates: list[Candidate] = []
+    longest_candidates: list[Candidate] = []
+    longest_path_length = -1
     candidate_reasons: Counter[str] = Counter()
 
-    for vlan_id in vlan_order:
+    for vlan_id in sorted(vlan_ids):
         constrained_adjacency = vlan_adjacency(edge_supports, vlan_id)
-        source_order = sorted(constrained_adjacency)
-        rng.shuffle(source_order)
-        for source in source_order:
+        for source in sorted(constrained_adjacency):
             if source not in base_tree_cache:
                 base_tree_cache[source] = shortest_path_tree(
                     source,
@@ -522,8 +492,7 @@ def collect_candidates(
                 source,
                 constrained_adjacency,
             )
-            targets = [target for target in distances if source < target]
-            rng.shuffle(targets)
+            targets = sorted(target for target in distances if source < target)
             for target in targets:
                 counters["checked-vlan-node-pairs"] += 1
                 baseline_distance = base_distances.get(target)
@@ -534,6 +503,9 @@ def collect_candidates(
                 if constrained_distance <= baseline_distance:
                     candidate_reasons["no-vlan-detour"] += 1
                     continue
+                if constrained_distance < longest_path_length:
+                    candidate_reasons["shorter-than-current-longest"] += 1
+                    continue
                 path_count = path_counts[target]
                 if path_count > args.max_answer_paths:
                     candidate_reasons["too-many-answer-paths"] += 1
@@ -542,22 +514,28 @@ def collect_candidates(
                 if len(paths) != path_count:
                     candidate_reasons["path-count-mismatch"] += 1
                     continue
-                candidates.append(
-                    Candidate(
-                        source_node_id=source,
-                        target_node_id=target,
-                        vlan_id=vlan_id,
-                        baseline_path_length=baseline_distance,
-                        vlan_path_length=constrained_distance,
-                        paths=paths,
-                    )
+                candidate = Candidate(
+                    source_node_id=source,
+                    target_node_id=target,
+                    vlan_id=vlan_id,
+                    baseline_path_length=baseline_distance,
+                    vlan_path_length=constrained_distance,
+                    paths=paths,
                 )
-                if len(candidates) >= args.samples_per_graph:
-                    break
-            if len(candidates) >= args.samples_per_graph:
-                break
-        if len(candidates) >= args.samples_per_graph:
-            break
+                if constrained_distance > longest_path_length:
+                    longest_path_length = constrained_distance
+                    longest_candidates = [candidate]
+                else:
+                    longest_candidates.append(candidate)
+
+    longest_candidates.sort(
+        key=lambda candidate: (
+            candidate.source_node_id,
+            candidate.target_node_id,
+            candidate.vlan_id,
+        )
+    )
+    selected = longest_candidates[:1]
 
     details: dict[str, Any] = {
         **dict(counters),
@@ -567,11 +545,15 @@ def collect_candidates(
         ) // 2,
         "vlan_supported_unique_edges": len(edge_supports),
         "candidate_reasons": dict(sorted(candidate_reasons.items())),
-        "selected_samples": len(candidates),
+        "longest_candidate_count": len(longest_candidates),
+        "longest_vlan_path_length": (
+            longest_path_length if longest_path_length >= 0 else None
+        ),
+        "selected_samples": len(selected),
     }
-    if not candidates:
+    if not selected:
         return [], details, "no-strict-vlan-detour-candidate"
-    return candidates, details, ""
+    return selected, details, ""
 
 
 def build_task_graph(
@@ -669,13 +651,12 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
     issue_path = output_root / ISSUES_FILE
     if issue_path.exists():
         issue_path.unlink()
-    rng = random.Random(args.seed)
     stats_rows: list[dict[str, Any]] = []
     summary: dict[str, Any] = {
         "dataset_root": str(dataset_root),
         "output_root": str(output_root),
-        "seed": args.seed,
-        "samples_per_graph": args.samples_per_graph,
+        "samples_per_graph": 1,
+        "candidate_selection": "maximum vlan_path_length, then stable ID order",
         "max_answer_paths": args.max_answer_paths,
         "max_range_size": args.max_range_size,
         "config_fields": args.config_fields,
@@ -702,7 +683,7 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
                 counters: dict[str, Any] = {"detail": error}
                 reason = "load-json-error"
             else:
-                candidates, counters, reason = collect_candidates(graph, args, rng)
+                candidates, counters, reason = collect_candidates(graph, args)
 
             if graph is None or not candidates:
                 split_summary["skipped_graphs"] += 1

@@ -15,6 +15,7 @@ from task_batch_inference_common import (
     validate_neighborhood_reachability_answer,
     validate_path_answer,
     validate_reachable_leaf_nodes_answer,
+    validate_vlan_path_answer,
 )
 
 
@@ -26,6 +27,14 @@ PATH_OUTPUT_EXAMPLE = """{
     ["NODE_A", "NODE_B", "NODE_C", "NODE_D"]
   ]
 }"""
+
+VLAN_PATH_OUTPUT_EXAMPLE_TEMPLATE = """{{
+  "vlan_id": {vlan_id},
+  "path_length": 3,
+  "paths": [
+    ["LSW_A", "LSW_B", "LSW_C", "LSW_D"]
+  ]
+}}"""
 
 AP_IMPACT_OUTPUT_EXAMPLE = """{
   "disconnected_ap_ids": ["AP_NODE_1", "AP_NODE_2"]
@@ -144,6 +153,44 @@ def build_reroute_vllm_prompt(sample: dict[str, Any]) -> str:
 【完整任务 JSON】
 {compact_json(sample)}
 """
+
+
+def build_vlan_path_vllm_prompt(sample: dict[str, Any]) -> str:
+    source_id = required_string(sample, "task_source_node_id")
+    target_id = required_string(sample, "task_target_node_id")
+    vlan_id = sample.get("task_vlan_id")
+    if isinstance(vlan_id, bool) or not isinstance(vlan_id, int):
+        raise ValueError("样本缺少有效的 task_vlan_id")
+    output_example = VLAN_PATH_OUTPUT_EXAMPLE_TEMPLATE.format(vlan_id=vlan_id)
+    return f"""请完成输入 JSON 中 task_question 描述的 VLAN 约束最短路径任务。
+
+源 LSW 节点 ID：{source_id}
+目标 LSW 节点 ID：{target_id}
+指定 VLAN：{vlan_id}
+
+要求：
+1. 将物理拓扑按无向图处理。
+2. LEFTPORT 属于 link.source，RIGHTPORT 属于 link.target，并通过 interface-name 匹配接口配置。
+3. 路径上每条链路的两端接口都必须允许 VLAN {vlan_id}；all 表示允许全部 VLAN，1-5 表示 VLAN 1 至 5。
+4. path_length 是满足 VLAN 约束的最短链路跳数。
+5. 如果存在多条等长最短路径，必须全部输出，paths 使用节点 ID。
+6. 只输出以下结构的 JSON 对象，不输出解释、代码块或思考过程：
+{output_example}
+
+【完整任务 JSON】
+{compact_json(sample)}
+"""
+
+
+def build_vlan_path_opencode_prompt(
+    site: str,
+    sample: dict[str, Any],
+) -> str:
+    return build_vlan_path_vllm_prompt(sample).replace(
+        "【完整任务 JSON】",
+        f"站点标识：{site}\n\n【完整任务 JSON】",
+        1,
+    )
 
 
 def build_reroute_opencode_prompt(
@@ -483,4 +530,20 @@ LINK_PORT_PREDICTION_SPEC = TaskInferenceSpec(
     build_vllm_prompt=build_link_port_vllm_prompt,
     build_opencode_prompt=build_link_port_opencode_prompt,
     validate_answer=validate_link_port_answer,
+)
+
+VLAN_CONSTRAINED_SHORTEST_PATH_SPEC = TaskInferenceSpec(
+    task_name="vlan_constrained_shortest_path_detour",
+    default_dataset_root=Path("vlan_constrained_shortest_path_dataset"),
+    default_vllm_output_root=Path(
+        "vllm-results/vlan_constrained_shortest_path"
+    ),
+    default_opencode_output_root=Path(
+        "opencode-results/vlan_constrained_shortest_path"
+    ),
+    default_model="qwen3-8b",
+    system_prompt=SYSTEM_PROMPT,
+    build_vllm_prompt=build_vlan_path_vllm_prompt,
+    build_opencode_prompt=build_vlan_path_opencode_prompt,
+    validate_answer=validate_vlan_path_answer,
 )
