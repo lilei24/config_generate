@@ -274,9 +274,9 @@ def initial_positions(
         ordered = sorted(values)
         max_rows = max(max_rows, len(ordered))
         for index, node_id in enumerate(ordered):
-            positions[node_id] = (110 + layer * 250, 90 + index * 76)
-    width = max(900, (max(layers, default=0) + 1) * 250 + 180)
-    height = max(640, max_rows * 76 + 150)
+            positions[node_id] = (130 + layer * 310, 100 + index * 108)
+    width = max(900, (max(layers, default=0) + 1) * 310 + 220)
+    height = max(640, max_rows * 108 + 180)
     return positions, width, height
 
 
@@ -510,11 +510,13 @@ input {{ width:200px;padding:0 9px; }} .spacer {{ flex:1; }}
 .edge.pass {{ stroke:#6ea87a; }} .edge.blocked {{ stroke:#d06a6a;stroke-dasharray:7 4; }} .edge.unknown {{ stroke:#d39a45;stroke-dasharray:3 4; }}
 .edge.answer {{ stroke:#279156;stroke-width:5; }} .edge.prediction {{ stroke:#2775c5;stroke-width:5; }} .edge.both {{ stroke:#008b8b;stroke-width:6; }}
 .edge.prediction.invalid {{ stroke:#c0392b;stroke-dasharray:8 4; }}
-.edge-label {{ font-size:10px;fill:#495665;pointer-events:none;text-anchor:middle;paint-order:stroke;stroke:#fff;stroke-width:4px;stroke-linejoin:round; }}
+.edge-label {{ font-size:10px;fill:#344150;pointer-events:none;text-anchor:middle;dominant-baseline:middle; }}
+.edge-label-bg {{ fill:#fff;stroke:#c7d0d9;stroke-width:1;rx:3;pointer-events:none;vector-effect:non-scaling-stroke; }}
 .node {{ cursor:pointer; }} .node circle {{ fill:#fff;stroke:#697887;stroke-width:2;vector-effect:non-scaling-stroke; }}
 .node.source circle {{ fill:#ddf4e4;stroke:#198044;stroke-width:4; }} .node.target circle {{ fill:#fde3e3;stroke:#b83232;stroke-width:4; }}
 .node.selected circle,.node:hover circle {{ stroke:#111827;stroke-width:5; }}
-.node text {{ font-size:11px;fill:#17212b;text-anchor:middle;pointer-events:none;paint-order:stroke;stroke:#fff;stroke-width:4px;stroke-linejoin:round; }}
+.node text {{ font-size:11px;fill:#17212b;text-anchor:middle;pointer-events:none; }}
+.node-label-bg {{ fill:#fff;stroke:#c7d0d9;stroke-width:1;rx:3;pointer-events:none;vector-effect:non-scaling-stroke; }}
 aside {{ min-height:0;overflow:auto;background:#fff;border-left:1px solid var(--border); }}
 .panel {{ padding:13px 15px;border-bottom:1px solid var(--border); }} .panel h2 {{ margin:0 0 9px;font-size:13px; }}
 .kv {{ display:grid;grid-template-columns:112px minmax(0,1fr);gap:5px 9px;font-size:12px;line-height:1.55; }} .kv b {{ color:var(--muted);font-weight:600; }}
@@ -550,13 +552,18 @@ function edgeClass(edge){{let cls=`edge ${{edge.vlanStatus}}`;if(edge.inAnswer&&
 function edgeVisible(edge){{if(mode==='answer')return edge.inAnswer;if(mode==='prediction')return edge.inPrediction;if(mode==='vlan')return edge.vlanStatus==='pass';return true;}}
 function linePoint(a,b,d){{const dx=b.x-a.x,dy=b.y-a.y,len=Math.max(1,Math.hypot(dx,dy));return {{x:a.x+dx*d/len,y:a.y+dy*d/len}};}}
 function make(tag,attrs={{}}){{const element=document.createElementNS(NS,tag);Object.entries(attrs).forEach(([k,v])=>element.setAttribute(k,String(v)));return element;}}
+function clipped(value,maxLength){{const text=String(value);return text.length<=maxLength?text:text.slice(0,Math.max(1,maxLength-1))+"…";}}
+function textWidth(value,fontSize=10){{let width=0;for(const character of String(value))width+=character.charCodeAt(0)>255?fontSize:fontSize*.61;return Math.ceil(width);}}
+function overlaps(left,right,padding=4){{return !(left.x+left.width+padding<right.x||right.x+right.width+padding<left.x||left.y+left.height+padding<right.y||right.y+right.height+padding<left.y);}}
+function nodeObstacles(){{const boxes=[];data.nodes.forEach(node=>{{boxes.push({{x:node.x-28,y:node.y-28,width:56,height:56}});const name=clipped(node.name==="<missing>"?node.id:node.name,24),width=textWidth(name,11)+12;boxes.push({{x:node.x-width/2,y:node.y+25,width,height:20}});}});return boxes;}}
+function placeEdgeLabel(a,b,label,occupied){{const width=textWidth(label)+12,height=18,dx=b.x-a.x,dy=b.y-a.y,length=Math.max(1,Math.hypot(dx,dy)),nx=-dy/length,ny=dx/length;const candidates=[];[.5,.42,.58,.34,.66].forEach(t=>{{[16,-16,30,-30,44,-44].forEach(offset=>candidates.push({{x:a.x+dx*t+nx*offset,y:a.y+dy*t+ny*offset}}));}});const selected=candidates.find(point=>{{const box={{x:point.x-width/2,y:point.y-height/2,width,height}};return !occupied.some(other=>overlaps(box,other));}})||candidates[0];const box={{x:selected.x-width/2,y:selected.y-height/2,width,height}};occupied.push(box);return {{...selected,...box}};}}
 function render(){{
   svg.replaceChildren();svg.setAttribute("width",data.canvas.width);svg.setAttribute("height",data.canvas.height);svg.setAttribute("viewBox",`0 0 ${{data.canvas.width}} ${{data.canvas.height}}`);
-  const edgeLayer=make("g"),labelLayer=make("g"),nodeLayer=make("g");svg.append(edgeLayer,labelLayer,nodeLayer);
+  const edgeLayer=make("g"),labelLayer=make("g"),nodeLayer=make("g"),occupied=nodeObstacles();svg.append(edgeLayer,labelLayer,nodeLayer);
   data.edges.forEach(edge=>{{const a=nodes.get(edge.source),b=nodes.get(edge.target);if(!a||!b)return;const visible=edgeVisible(edge),start=linePoint(a,b,24),end=linePoint(b,a,24);const line=make("line",{{x1:start.x,y1:start.y,x2:end.x,y2:end.y,class:edgeClass(edge)+(selected===`e${{edge.index}}`?' selected':''),opacity:visible?1:(mode==='compare'?0.16:0)}});line.dataset.index=edge.index;line.addEventListener("click",()=>showEdge(edge));const tip=make("title");tip.textContent=`${{edge.source}} [${{edge.leftPort}}] ↔ ${{edge.target}} [${{edge.rightPort}}]\nVLAN: ${{statusText[edge.vlanStatus]}}`;line.append(tip);edgeLayer.append(line);
-    if(visible){{const label=make("text",{{x:(a.x+b.x)/2,y:(a.y+b.y)/2-5,class:"edge-label"}});label.textContent=`${{edge.leftPort}} | ${{edge.rightPort}}`;labelLayer.append(label);}}
+    if(visible){{const fullLabel=`${{edge.leftPort}} | ${{edge.rightPort}}`,label=clipped(fullLabel,31),position=placeEdgeLabel(a,b,label,occupied),group=make("g");group.append(make("rect",{{x:position.x,y:position.y,width:position.width,height:position.height,class:"edge-label-bg"}}));const text=make("text",{{x:position.x+position.width/2,y:position.y+position.height/2,class:"edge-label"}});text.textContent=label;const labelTip=make("title");labelTip.textContent=fullLabel;text.append(labelTip);group.append(text);labelLayer.append(group);}}
   }});
-  data.nodes.forEach(node=>{{const g=make("g",{{class:`node${{node.isSource?' source':''}}${{node.isTarget?' target':''}}${{selected===`n${{node.id}}`?' selected':''}}`,transform:`translate(${{node.x}} ${{node.y}})`}});g.addEventListener("click",()=>showNode(node));g.append(make("circle",{{r:20}}));const label=make("text",{{y:35}});label.textContent=node.name==="<missing>"?node.id:node.name;g.append(label);const id=make("text",{{y:4}});id.textContent=node.id.length>13?node.id.slice(0,11)+"…":node.id;g.append(id);const tip=make("title");tip.textContent=`${{node.id}}\n${{node.name}}\n${{node.role}}`;g.append(tip);nodeLayer.append(g);}});
+  data.nodes.forEach(node=>{{const g=make("g",{{class:`node${{node.isSource?' source':''}}${{node.isTarget?' target':''}}${{selected===`n${{node.id}}`?' selected':''}}`,transform:`translate(${{node.x}} ${{node.y}})`}});g.addEventListener("click",()=>showNode(node));g.append(make("circle",{{r:20}}));const fullName=node.name==="<missing>"?node.id:node.name,name=clipped(fullName,24),nameWidth=textWidth(name,11)+12;g.append(make("rect",{{x:-nameWidth/2,y:25,width:nameWidth,height:20,class:"node-label-bg"}}));const label=make("text",{{y:39}});label.textContent=name;g.append(label);const id=make("text",{{y:4}});id.textContent=clipped(node.id,13);g.append(id);const tip=make("title");tip.textContent=`${{node.id}}\n${{node.name}}\n${{node.role}}`;g.append(tip);nodeLayer.append(g);}});
   applyScale();
 }}
 function applyScale(){{svg.style.transform=`scale(${{scale}})`;svg.style.marginRight=`${{data.canvas.width*(scale-1)}}px`;svg.style.marginBottom=`${{data.canvas.height*(scale-1)}}px`;}}
