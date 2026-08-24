@@ -592,10 +592,8 @@ def build_task_graph(
     return task_graph
 
 
-def output_relative_path(relative_input: Path, sample_index: int) -> Path:
-    return relative_input.with_name(
-        f"{relative_input.stem}__vlan_path_{sample_index:03d}.json"
-    )
+def output_relative_path(relative_input: Path) -> Path:
+    return relative_input
 
 
 def remove_stale_outputs(
@@ -608,6 +606,9 @@ def remove_stale_outputs(
         parent = output_root / version / split / relative_input.parent
         if not parent.is_dir():
             continue
+        current_output = parent / relative_input.name
+        if current_output.is_file():
+            current_output.unlink()
         for path in parent.glob(f"{prefix}*.json"):
             path.unlink()
 
@@ -701,8 +702,8 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
                 )
             else:
                 split_summary["graphs_with_samples"] += 1
-                for sample_index, candidate in enumerate(candidates, start=1):
-                    relative_output = output_relative_path(relative_input, sample_index)
+                for candidate in candidates:
+                    relative_output = output_relative_path(relative_input)
                     with_path = output_root / WITH_ANSWER_DIR / split / relative_output
                     without_path = (
                         output_root / WITHOUT_ANSWER_DIR / split / relative_output
