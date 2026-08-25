@@ -1,6 +1,4 @@
-# config_generate 推理分支文档中心
-
-本文档对应 `inference` 分支，主要包含配置生成数据集构造、模型推理、SwanLab 评估和结果分析代码。
+# README
 
 ## 重点代码
 
