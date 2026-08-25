@@ -2,6 +2,19 @@
 
 本目录与代码目录 `inference/` 一一对应。每个 Python 文件都有同名文档，重点说明业务用途、核心逻辑、参数、输入输出和指标口径。
 
+## 重点代码
+
+配置生成推理主要使用以下两个脚本：
+
+| 推理方式 | 代码 | 作用 |
+|---|---|---|
+| 本地部署的 vLLM | [batch_infer_qa_swanlab.py](batch_infer_qa_swanlab.md) | 调用本地 OpenAI-compatible vLLM 服务完成批量推理，保存逐样本结果，并将单样本指标和累计评估指标上传 SwanLab。 |
+| 外部 LLM API | [batch_infer_llm_api_swanlab.py](batch_infer_llm_api_swanlab.md) | 调用外部 OpenAI-compatible API 完成批量推理，保存逐样本结果，并将单样本指标和累计评估指标上传 SwanLab。 |
+
+常规配置生成实验根据模型部署方式直接选择其中一个脚本即可。两个脚本都在推理过程中使用 `model-output` 和 `answer` 计算评估指标并上传 SwanLab，不需要再单独运行评估脚本。
+
+下方其他脚本主要用于仅预测 Value 的对照实验、历史结果离线分析、指标复算和结果绘图。
+
 ## 批量推理
 
 | 脚本 | 功能 |
