@@ -1,5 +1,7 @@
 .agents/
 .codex/
+!docs/
+!docs/**
 .temp/
 QA/
 QA_token_analysis/
