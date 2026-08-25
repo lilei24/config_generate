@@ -16,6 +16,28 @@
 4. 尽力把模型文本解析为 JSON；解析失败时保留原文和解析错误，请求失败写入 `failures.jsonl`。
 5. 结果保持 `split/task/相对文件名` 目录结构，并保存 `structure-hints`、`model-output` 和 `answer`。
 
+## 代码实现说明
+
+### 样本发现与 Prompt 构造
+
+- 程序在 `<qa-root>/<split>/<task>` 下递归查找 `*.json`，任务顺序来自 `--tasks`，同一任务内部使用路径字典序，因此运行顺序稳定且可复现。
+- 每个样本必须是 JSON 对象，并同时具有 `prompt`、`input`、`output`。`prompt` 是任务要求，`input` 是保留其他配置后的完整拓扑上下文，`output` 仅用于提取目标顶层 Key、保存标准答案和后续评估。
+- `input` 使用 `ensure_ascii=False` 和缩进格式序列化后插入 Prompt。代码只从 `output` 读取顶层 Key；除非人工配置了 `TOP_LEVEL_KEY_STRUCTURE_HINTS`，不会把答案内部真实字段和值放入标准 Prompt。
+- 结构提示按目标顶层 Key 查找。上下文中有同名或相似配置时，Prompt 要求优先采用上下文；只有缺少可靠参考时才将结构提示作为兜底。
+
+### 模型调用与回答解析
+
+- OpenAI 客户端由 `base_url` 和 `api_key` 初始化，请求体包含 `model`、单条 user message 和 `temperature`，因此可直接连接 vLLM 或兼容 Chat Completions 的服务。
+- 默认在 `extra_body.chat_template_kwargs` 中设置 `enable_thinking=false`。传入 `--enable-thinking` 时不发送该限制，但返回文本仍会删除完整的 `<think>...</think>` 片段。
+- 解析前先去除完整 Markdown JSON 代码块。如果回答不是以 `{` 或 `[` 开头，代码会再尝试补外层 `{}`，用于兼容模型只返回 `"key": {...}` 的情况。
+- 解析成功后 `model-output` 保存 JSON 值；解析失败时该字段保留模型文本，并增加 `model-output-parse-error` 和 `model-output-raw`，方便区分模型内容错误与 API 请求错误。
+
+### 输出与失败处理
+
+- 输出路径由输入相对 QA 任务目录的路径计算，能够保留输入中的子目录层次和原始文件名。
+- 每个结果至少保存 `structure-hints`、`model-output`、`answer`。请求异常时仍生成对应结果 JSON，其中 `model-output` 为空并增加 `error`。
+- split 级 `failures.jsonl` 在每次运行开始时固定覆盖；逐行记录输入路径、任务和错误原因。进度包含已完成数、百分比、耗时、处理速度和预计剩余时间。
+
 ## 参数
 
 | 参数 | 说明 | 默认值或约束 |
@@ -67,29 +89,6 @@ python inference/batch_infer_qa.py --help
 - 扫描文件数、模型错误数、解析/评估错误数和有效评估数应分开理解，指标分母以代码实际纳入的有效对象为准。
 - 推理结果目录属于实验产物，不应覆盖 QA 数据源；改变预测字段名时需同步检查 `pred-keys`。
 
-## 关键接口
-
-| 接口 | 类型 | 职责 |
-|---|---|---|
-| `import_openai_client` | function | 实现该脚本的核心处理步骤。 |
-| `iter_qa_files` | function | 实现该脚本的核心处理步骤。 |
-| `load_qa` | function | 实现该脚本的核心处理步骤。 |
-| `output_top_level_keys` | function | 只读取监督答案的顶层 Key，不把答案内部结构或 value 放入 Prompt。 |
-| `structure_hints_value_for_keys` | function | 返回当前目标 Key 对应的结构化常见配置；未配置时返回 None。 |
-| `structure_hints_for_keys` | function | 把结构化常见配置格式化为插入 Prompt 的 JSON 文本。 |
-| `structure_hints_for_sample` | function | 提取当前样本实际使用的结构提示，供结果 JSON 直接保存。 |
-| `build_user_prompt` | function | 实现该脚本的核心处理步骤。 |
-| `strip_think` | function | 实现该脚本的核心处理步骤。 |
-| `strip_markdown_fence` | function | 实现该脚本的核心处理步骤。 |
-| `parse_model_output` | function | Best-effort parse model output so result JSON is easy to inspect. |
-| `chat_completion` | function | 实现该脚本的核心处理步骤。 |
-| `result_path` | function | 实现该脚本的核心处理步骤。 |
-| `write_json` | function | 实现该脚本的核心处理步骤。 |
-| `append_jsonl` | function | 实现该脚本的核心处理步骤。 |
-| `print_progress` | function | 实现该脚本的核心处理步骤。 |
-| `run` | function | 实现该脚本的核心处理步骤。 |
-| `parse_args` | function | 实现该脚本的核心处理步骤。 |
-| `main` | function | 实现该脚本的核心处理步骤。 |
 
 ## 相关文档
 

@@ -15,6 +15,14 @@
 3. 计算目标所在连通分量和归一化 betweenness centrality。
 4. 整数因素按实际值逐项统计；中介中心性按 0.1 区间分组。
 
+## 代码实现说明
+
+- nodes 的 `id` 作为图节点，links 的 source/target 作为无向边；缺失端点和不在节点集合中的边不会参与目标节点图计算。
+- 从目标节点 BFS 得到 hop 距离。累计 2-hop 和 3-hop 数量包含所有更近节点，不是仅统计恰好距离等于 2 或 3 的节点。
+- connected component size 是目标节点所在连通分量节点数；目标节点度数为 0 时 `is_isolated=true`。无法定位目标节点的样本进入异常状态。
+- 中介中心性按无向、无权图最短路径计算并归一化到 0-1，再按 `[0.0,0.1)` 等 0.1 区间分组，最高值进入 `0.9-1.0`。
+- 邻居数、分量大小和孤立状态按实际整数/布尔值逐组统计，不合并成 0-5 等粗范围。
+
 ## 参数
 
 | 参数 | 说明 | 默认值或约束 |
@@ -66,29 +74,5 @@ python inference/analyze_topology_position.py --help
 - 扫描文件数、模型错误数、解析/评估错误数和有效评估数应分开理解，指标分母以代码实际纳入的有效对象为准。
 - 推理结果目录属于实验产物，不应覆盖 QA 数据源；改变预测字段名时需同步检查 `pred-keys`。
 
-## 关键接口
-
-| 接口 | 类型 | 职责 |
-|---|---|---|
-| `parse_csv_values` | function | 实现该脚本的核心处理步骤。 |
-| `iter_result_files` | function | 实现该脚本的核心处理步骤。 |
-| `qa_path_for_result` | function | 实现该脚本的核心处理步骤。 |
-| `target_node_id` | function | 实现该脚本的核心处理步骤。 |
-| `graph_parts` | function | 实现该脚本的核心处理步骤。 |
-| `shortest_distances` | function | 实现该脚本的核心处理步骤。 |
-| `component_nodes` | function | 实现该脚本的核心处理步骤。 |
-| `betweenness_centrality` | function | 实现该脚本的核心处理步骤。 |
-| `betweenness_group` | function | 实现该脚本的核心处理步骤。 |
-| `topology_values` | function | 实现该脚本的核心处理步骤。 |
-| `empty_metric_values` | function | 实现该脚本的核心处理步骤。 |
-| `collect_rows` | function | 实现该脚本的核心处理步骤。 |
-| `numeric_group_sort_key` | function | 实现该脚本的核心处理步骤。 |
-| `group_rows` | function | 实现该脚本的核心处理步骤。 |
-| `strip_internal_fields` | function | 实现该脚本的核心处理步骤。 |
-| `write_csv` | function | 实现该脚本的核心处理步骤。 |
-| `write_json` | function | 实现该脚本的核心处理步骤。 |
-| `run` | function | 实现该脚本的核心处理步骤。 |
-| `parse_args` | function | 实现该脚本的核心处理步骤。 |
-| `main` | function | 实现该脚本的核心处理步骤。 |
 
 [返回 inference 脚本索引](README.md)

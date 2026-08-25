@@ -14,6 +14,13 @@
 2. 支持筛选 root key、split、task 和指标。
 3. 按 centrality group 与 distance 形成矩阵或柱状图。
 
+## 代码实现说明
+
+- 脚本读取逐文件 `per_file_betweenness_by_distance.csv`，因此可以先按 root key 筛选，再对相同中心性组和距离的样本重新求平均。
+- 只保留状态正常且指标可转为数值的记录；split、task、root key 和 `min-files` 共同控制进入图表的数据。
+- heatmap 以中介中心性组和距离构造二维矩阵；bar-grid 展示不同维度分面；bar-all 将筛选结果放在同一图比较。
+- 该绘图阶段的均值是 CSV 行级数值聚合，不会重新构造 micro Counter；需要严格 micro 口径时应优先使用分析脚本输出的聚合 CSV。
+
 ## 参数
 
 | 参数 | 说明 | 默认值或约束 |
@@ -48,16 +55,6 @@ python inference/plot_betweenness_distance.py --help
 - 扫描文件数、模型错误数、解析/评估错误数和有效评估数应分开理解，指标分母以代码实际纳入的有效对象为准。
 - 推理结果目录属于实验产物，不应覆盖 QA 数据源；改变预测字段名时需同步检查 `pred-keys`。
 
-## 关键接口
-
-| 接口 | 类型 | 职责 |
-|---|---|---|
-| `load_data` | function | 实现该脚本的核心处理步骤。 |
-| `plot_heatmap` | function | 实现该脚本的核心处理步骤。 |
-| `plot_bar_grid` | function | 实现该脚本的核心处理步骤。 |
-| `plot_bar_all` | function | 实现该脚本的核心处理步骤。 |
-| `parse_args` | function | 实现该脚本的核心处理步骤。 |
-| `main` | function | 实现该脚本的核心处理步骤。 |
 
 ## 相关文档
 

@@ -15,6 +15,13 @@
 3. macro 对有效样本指标求算术平均；micro 先累计正确数和预测/答案总数再计算。
 4. 统一样本表头和 JSON 可读格式。
 
+## 代码实现说明
+
+- SwanLab 采用延迟导入，未安装依赖时只在实际使用实验功能时抛出明确错误，不影响纯本地评估脚本。
+- 运行配置从 `argparse.Namespace` 转成可序列化字典，并补充 Python 版本、当前脚本和 `git rev-parse --short HEAD`；Path 自动转成字符串。
+- 单样本日志统一映射为九条数值曲线。macro 聚合对有效样本同名指标求 `mean`；micro 聚合调用离线评估累加器，先汇总原始计数再生成指标。
+- 样本表固定列顺序，并将 prompt、input、预测和答案转成带缩进的可读 JSON 文本。表格通过 `swanlab.echarts.Table` 构造，当前 SwanLab 版本缺少该能力时会显式报错。
+
 ## 参数
 
 该文件是公共库模块，没有独立命令行参数，供其他脚本导入调用。
@@ -34,20 +41,5 @@
 - 扫描文件数、模型错误数、解析/评估错误数和有效评估数应分开理解，指标分母以代码实际纳入的有效对象为准。
 - 推理结果目录属于实验产物，不应覆盖 QA 数据源；改变预测字段名时需同步检查 `pred-keys`。
 
-## 关键接口
-
-| 接口 | 类型 | 职责 |
-|---|---|---|
-| `import_swanlab` | function | 实现该脚本的核心处理步骤。 |
-| `current_git_commit` | function | 实现该脚本的核心处理步骤。 |
-| `base_runtime_config` | function | 实现该脚本的核心处理步骤。 |
-| `metric_log_values` | function | 实现该脚本的核心处理步骤。 |
-| `macro_metric_log_values` | function | 实现该脚本的核心处理步骤。 |
-| `running_eval_log_values` | function | 实现该脚本的核心处理步骤。 |
-| `sample_table_headers` | function | 实现该脚本的核心处理步骤。 |
-| `sample_table_row` | function | 实现该脚本的核心处理步骤。 |
-| `json_dumps` | function | 实现该脚本的核心处理步骤。 |
-| `make_table` | function | 实现该脚本的核心处理步骤。 |
-| `finish_swanlab` | function | 实现该脚本的核心处理步骤。 |
 
 [返回 inference 脚本索引](README.md)

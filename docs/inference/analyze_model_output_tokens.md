@@ -15,6 +15,13 @@
 3. 分别统计成功、错误、缺失预测和不同值类型。
 4. 输出逐文件、汇总、分位数、上下文阈值、直方图 CSV/JSON/SVG。
 
+## 代码实现说明
+
+- 结果文件按 split/task 递归扫描，并按 `pred-keys` 顺序读取预测。结构化 dict/list 会稳定序列化，字符串直接作为模型文本，保证 Token 统计对象与实际输出含义一致。
+- 粗略 BPE 规则按中英文、数字、标点等字符片段估算，不加载具体模型 tokenizer，优势是速度快且无模型依赖；结果适合比较分布，不适合作为服务硬截断的唯一依据。
+- 每个文件记录预测字段名、值类型、字符数、Token 数和状态。结果已有 error、缺少预测字段或值类型异常时单独计数，不进入正常 Token 数值分布。
+- 分位数表反映 P50/P90/P95/P99 等位置；阈值表计算输出不超过 4K 至 2M 各阈值的样本比例；直方图 CSV 和 SVG 使用相同分箱边界。
+
 ## 参数
 
 | 参数 | 说明 | 默认值或约束 |
@@ -67,34 +74,5 @@ python inference/analyze_model_output_tokens.py --help
 - 扫描文件数、模型错误数、解析/评估错误数和有效评估数应分开理解，指标分母以代码实际纳入的有效对象为准。
 - 推理结果目录属于实验产物，不应覆盖 QA 数据源；改变预测字段名时需同步检查 `pred-keys`。
 
-## 关键接口
-
-| 接口 | 类型 | 职责 |
-|---|---|---|
-| `TokenRow` | class | 实现该脚本的核心处理步骤。 |
-| `iter_result_files` | function | Enumerate result JSON files as result_root/<split>/<task>/*.json. |
-| `read_json` | function | 实现该脚本的核心处理步骤。 |
-| `find_prediction_key` | function | 实现该脚本的核心处理步骤。 |
-| `model_output_text` | function | Convert a model output value to text for token estimation. |
-| `value_type_name` | function | 实现该脚本的核心处理步骤。 |
-| `rough_bpe_token_count` | function | Rough BPE-like token estimate, aligned with the existing QA token analysis. |
-| `parse_csv_values` | function | 实现该脚本的核心处理步骤。 |
-| `parse_int_csv` | function | 实现该脚本的核心处理步骤。 |
-| `quantile` | function | 实现该脚本的核心处理步骤。 |
-| `token_stats` | function | 实现该脚本的核心处理步骤。 |
-| `write_csv` | function | 实现该脚本的核心处理步骤。 |
-| `write_json` | function | 实现该脚本的核心处理步骤。 |
-| `row_to_dict` | function | 实现该脚本的核心处理步骤。 |
-| `collect_rows` | function | 实现该脚本的核心处理步骤。 |
-| `grouped_ok_values` | function | 实现该脚本的核心处理步骤。 |
-| `error_counts` | function | 实现该脚本的核心处理步骤。 |
-| `build_summary_rows` | function | 实现该脚本的核心处理步骤。 |
-| `build_threshold_rows` | function | 实现该脚本的核心处理步骤。 |
-| `build_quantile_rows` | function | 实现该脚本的核心处理步骤。 |
-| `build_histogram_rows` | function | 实现该脚本的核心处理步骤。 |
-| `write_histogram_svg` | function | 实现该脚本的核心处理步骤。 |
-| `write_outputs` | function | 实现该脚本的核心处理步骤。 |
-| `parse_args` | function | 实现该脚本的核心处理步骤。 |
-| `main` | function | 实现该脚本的核心处理步骤。 |
 
 [返回 inference 脚本索引](README.md)

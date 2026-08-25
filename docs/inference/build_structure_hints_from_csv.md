@@ -15,6 +15,13 @@
 3. 按叶子类型生成 `<string>`、`<number>`、`<boolean>` 等占位值。
 4. 同一顶层 Key 保留多个满足阈值的常见结构。
 
+## 代码实现说明
+
+- 输入是 `analyze_output_structures.py` 产生的 distribution CSV。代码先按 `sample_count > min-sample-count` 筛选，并可限制 split/task，避免将极少出现的长尾 Schema 注入 Prompt。
+- Path 解析器识别 `/` 分隔字段、JSON Pointer 转义和数组 `[]`。每条路径插入树节点，多条路径共同恢复对象和列表嵌套关系。
+- 叶子根据统计中记录的 JSON 类型生成 `<string>`、`<number>`、`<boolean>`、`<null>` 等占位符；占位符只表示结构和类型，不包含训练答案真实值。
+- 输出 Python 文件按顶层 Key 建立列表，同一 Key 可有多个高频结构。生成内容需要人工审查后放入推理脚本的 `TOP_LEVEL_KEY_STRUCTURE_HINTS`，不会自动改写 Prompt 源码。
+
 ## 参数
 
 | 参数 | 说明 | 默认值或约束 |
@@ -55,23 +62,6 @@ python inference/build_structure_hints_from_csv.py --help
 - 扫描文件数、模型错误数、解析/评估错误数和有效评估数应分开理解，指标分母以代码实际纳入的有效对象为准。
 - 推理结果目录属于实验产物，不应覆盖 QA 数据源；改变预测字段名时需同步检查 `pred-keys`。
 
-## 关键接口
-
-| 接口 | 类型 | 职责 |
-|---|---|---|
-| `PathNode` | class | 实现该脚本的核心处理步骤。 |
-| `parse_csv_values` | function | 实现该脚本的核心处理步骤。 |
-| `unescape_path_key` | function | 实现该脚本的核心处理步骤。 |
-| `parse_path` | function | Parse paths emitted by analyze_output_structures.py. |
-| `insert_path` | function | 实现该脚本的核心处理步骤。 |
-| `path_tree` | function | 实现该脚本的核心处理步骤。 |
-| `node_to_value` | function | Convert a path trie into a JSON-like skeleton. |
-| `structure_from_paths` | function | 实现该脚本的核心处理步骤。 |
-| `read_distribution_rows` | function | 实现该脚本的核心处理步骤。 |
-| `build_hints` | function | 实现该脚本的核心处理步骤。 |
-| `write_python_file` | function | 实现该脚本的核心处理步骤。 |
-| `parse_args` | function | 实现该脚本的核心处理步骤。 |
-| `main` | function | 实现该脚本的核心处理步骤。 |
 
 ## 相关文档
 

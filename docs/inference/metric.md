@@ -16,6 +16,22 @@
 4. 值准确率只在匹配叶子路径内比较值；幻觉率以预测字段数为分母，缺失率以答案字段数为分母。
 5. `evaluate_json` 汇总所有指标，供其他脚本直接调用。
 
+## 代码实现说明
+
+### JSON 特征展开
+
+- 输入可以是已解析的 dict/list，也可以是 JSON 字符串；字符串首先执行 `json.loads`，解析失败由调用方记录为评估错误。
+- 递归遍历时，每遇到字典字段就产生 JSON Pointer 风格路径，例如 `/root/items[]/name`。Key 中的 `~` 和 `/` 分别转义为 `~0` 和 `~1`。
+- 数组 `wildcard` 模式把每个元素路径统一为 `[]`，但使用 Counter 保留重复次数；`index` 模式则形成 `[0]`、`[1]` 等位置相关路径。
+- 每个叶子同时形成 leaf path、`(path, type, normalized value)` 三元组和 `(path, normalized value)` 对。布尔值在整数判断前处理，避免 Python 将 bool 误判为 int。
+
+### 指标计算
+
+- 字段路径和叶子三元组都用 Counter 交集计算正确数量，Precision 分母为预测总数，Recall 分母为答案总数，F1 为二者调和平均。
+- `value_accuracy` 的分母是预测与答案成功匹配的叶子路径数，分子是在这些路径上 value 也一致的数量；路径完全不匹配时该值为 0。
+- 幻觉字段由 `pred_counter - gold_counter` 得到，缺失字段由相反方向相减得到。幻觉率除以预测字段数，缺失率除以答案字段数。
+- 顶层配置指标单独比较根对象 Key，可同时输出 exact match、缺失 Key 和额外 Key，不能替代嵌套字段结构指标。
+
 ## 参数
 
 该文件是公共库模块，没有独立命令行参数，供其他脚本导入调用。
@@ -35,22 +51,5 @@
 - 扫描文件数、模型错误数、解析/评估错误数和有效评估数应分开理解，指标分母以代码实际纳入的有效对象为准。
 - 推理结果目录属于实验产物，不应覆盖 QA 数据源；改变预测字段名时需同步检查 `pred-keys`。
 
-## 关键接口
-
-| 接口 | 类型 | 职责 |
-|---|---|---|
-| `load_json` | function | 支持传入 dict/list 或 JSON 字符串。 |
-| `json_type` | function | 返回 JSON 类型名。 |
-| `normalize_value` | function | 把叶子值标准化成可比较、可哈希的字符串。 |
-| `is_leaf` | function | JSON 叶子节点：非 dict、非 list。 |
-| `escape_path_key` | function | 简单处理 JSON Pointer 中的特殊字符。 |
-| `counter_prf` | function | 基于 Counter 的 Precision / Recall / F1。 |
-| `collect_json_features` | function | 从 JSON 中抽取： |
-| `top_level_config_metric` | function | 指标 1：顶层配置名准确率。 |
-| `value_accuracy_metric` | function | 指标 4：值准确率。 |
-| `hallucination_missing_metric` | function | 指标 6：幻觉字段 / 缺失字段。 |
-| `evaluate_json` | function | 总评估函数。 |
-| `evaluate_record` | function | 如果你的数据格式是： |
-| `pretty_print_metrics` | function | 简单打印核心指标。 |
 
 [返回 inference 脚本索引](README.md)

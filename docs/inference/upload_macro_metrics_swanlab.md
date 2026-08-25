@@ -15,6 +15,13 @@
 3. 每个有效样本记录 `sample/*`，累计列表计算 `eval/*` 的算术平均。
 4. 创建新 SwanLab 实验，不恢复旧实验。
 
+## 代码实现说明
+
+- 程序独立扫描已有推理结果，不调用 `batch_evaluate_qa.py` 的命令参数，也不依赖已有 SwanLab run。默认按 split/task 及路径字典序确定 step。
+- 每个结果读取预测与 `answer` 后调用统一指标模块。成功样本先记录当前 `sample/*`，再加入历史有效指标列表，并对列表内每个指标做算术平均得到当前 `eval/*`。
+- 文件存在 API error、缺预测、JSON 解析失败或评估异常时会打印/记录失败状态，但不会加入 macro 均值列表。因此 eval 横轴 step 是已处理文件序号，均值分母是截至当前的有效评估样本数。
+- 每次运行创建新的 SwanLab 实验，适合把同一批历史结果以 macro 口径重新观察，不会覆盖原推理实验。
+
 ## 参数
 
 | 参数 | 说明 | 默认值或约束 |
@@ -66,17 +73,6 @@ python inference/upload_macro_metrics_swanlab.py --help
 - 扫描文件数、模型错误数、解析/评估错误数和有效评估数应分开理解，指标分母以代码实际纳入的有效对象为准。
 - 推理结果目录属于实验产物，不应覆盖 QA 数据源；改变预测字段名时需同步检查 `pred-keys`。
 
-## 关键接口
-
-| 接口 | 类型 | 职责 |
-|---|---|---|
-| `parse_csv_values` | function | 实现该脚本的核心处理步骤。 |
-| `ordered_result_files` | function | 实现该脚本的核心处理步骤。 |
-| `log_sample` | function | 实现该脚本的核心处理步骤。 |
-| `print_progress` | function | 实现该脚本的核心处理步骤。 |
-| `run` | function | 实现该脚本的核心处理步骤。 |
-| `parse_args` | function | 实现该脚本的核心处理步骤。 |
-| `main` | function | 实现该脚本的核心处理步骤。 |
 
 ## 相关文档
 

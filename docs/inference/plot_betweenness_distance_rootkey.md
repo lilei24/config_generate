@@ -15,6 +15,13 @@
 3. 按 root key 和距离组织行、以中介中心性分组为列，单元格显示指标。
 4. 可选输出其他热力图、折线和柱状图。
 
+## 代码实现说明
+
+- 输入是三层聚合 CSV，每行代表一个 `betweenness group × distance × root key` 组合，并包含该组合有效样本数和指标。
+- 默认 `combined-heatmap` 将 root key 与 distance 组合成纵轴行，中介中心性分组作为横轴列；单元格读取指定指标，并同时参考样本数决定是否显示。
+- 中介中心性区间、实际距离和 root key 使用显式排序键，避免 CSV/Excel 把区间按字符串错误排序。没有数据的组合保留为空白，不误填 0。
+- combined 图同时输出 PNG 和 PDF；其他可选模式包括独立热力图、按距离折线和柱状图。`min-files` 用于隐藏样本不足的格子。
+
 ## 参数
 
 | 参数 | 说明 | 默认值或约束 |
@@ -49,20 +56,6 @@ python inference/plot_betweenness_distance_rootkey.py --help
 - 扫描文件数、模型错误数、解析/评估错误数和有效评估数应分开理解，指标分母以代码实际纳入的有效对象为准。
 - 推理结果目录属于实验产物，不应覆盖 QA 数据源；改变预测字段名时需同步检查 `pred-keys`。
 
-## 关键接口
-
-| 接口 | 类型 | 职责 |
-|---|---|---|
-| `load_data` | function | 实现该脚本的核心处理步骤。 |
-| `plot_heatmap` | function | 实现该脚本的核心处理步骤。 |
-| `plot_heatmap_all` | function | 实现该脚本的核心处理步骤。 |
-| `plot_combined_heatmap` | function | 实现该脚本的核心处理步骤。 |
-| `plot_lines` | function | 实现该脚本的核心处理步骤。 |
-| `plot_lines_by_distance` | function | 实现该脚本的核心处理步骤。 |
-| `plot_bars` | function | 实现该脚本的核心处理步骤。 |
-| `plot_bars_all` | function | 实现该脚本的核心处理步骤。 |
-| `parse_args` | function | 实现该脚本的核心处理步骤。 |
-| `main` | function | 实现该脚本的核心处理步骤。 |
 
 ## 相关文档
 

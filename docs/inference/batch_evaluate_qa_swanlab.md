@@ -15,6 +15,13 @@
 3. 支持 `run_id + resume` 恢复实验，并通过日志前缀隔离 eval 指标。
 4. `swanlab-log-step` 控制汇总点在横轴上的 step。
 
+## 代码实现说明
+
+- 脚本首先调用本地评估入口，因此 `result-root`、预测字段、数组路径模式和错误处理与 `batch_evaluate_qa.py` 完全一致；SwanLab 不会改变指标计算。
+- 本地 `summary.json` 生成后，程序读取 overall 及各 split/task 聚合结果，把字段路径、叶子三元组、值准确率和幻觉/缺失率写入指定前缀，默认前缀为 `eval`。
+- `swanlab-run-id` 与 `swanlab-resume` 用于恢复已有 run；未提供 run id 时创建新实验。`swanlab-log-step` 只决定聚合点显示在横轴哪个 step，不参与平均值计算。
+- 该入口上传的是离线汇总点，不重放每个样本的 sample 曲线；若需要逐 step macro 曲线，应使用 `upload_macro_metrics_swanlab.py`。
+
 ## 参数
 
 | 参数 | 说明 | 默认值或约束 |
@@ -67,17 +74,6 @@ python inference/batch_evaluate_qa_swanlab.py --help
 - 扫描文件数、模型错误数、解析/评估错误数和有效评估数应分开理解，指标分母以代码实际纳入的有效对象为准。
 - 推理结果目录属于实验产物，不应覆盖 QA 数据源；改变预测字段名时需同步检查 `pred-keys`。
 
-## 关键接口
-
-| 接口 | 类型 | 职责 |
-|---|---|---|
-| `read_summary` | function | 实现该脚本的核心处理步骤。 |
-| `normalize_resume` | function | 实现该脚本的核心处理步骤。 |
-| `join_metric_name` | function | 实现该脚本的核心处理步骤。 |
-| `log_summary` | function | 实现该脚本的核心处理步骤。 |
-| `run` | function | 实现该脚本的核心处理步骤。 |
-| `parse_args` | function | 实现该脚本的核心处理步骤。 |
-| `main` | function | 实现该脚本的核心处理步骤。 |
 
 ## 相关文档
 

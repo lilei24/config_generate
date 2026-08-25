@@ -15,6 +15,25 @@
 3. 从 QA 根目录定位同名样本，估算 Input Token 并读取节点数量。
 4. 输出逐文件指标、Token 分桶指标、错误汇总和总 summary；分桶聚合使用累计计数得到 micro 指标。
 
+## 代码实现说明
+
+### 结果关联与状态分类
+
+- 程序从 `result-root/<split>/<task>` 递归读取结果，再用相对路径到 `qa-root/<split>/<task>` 定位原 QA。这样可以读取 Input 规模，同时不要求推理结果重复保存完整上下文。
+- 预测字段按 `--pred-keys` 顺序查找，兼容当前 `model-output` 和历史拼写。结果中已有 `error` 时记为 model error；预测或答案不能转成合法 JSON、QA 无法关联等情况记为 eval error。
+- 只有成功取得预测、答案并完成 `evaluate_json` 的文件增加 `evaluated_files`，模型错误和评估错误不会作为零分加入核心指标分母。
+
+### 聚合与 Token 分桶
+
+- 逐样本指标写入 JSONL，同时把 PRF 所需的 correct、pred total、gold total 累加到 overall 和 split/task 统计器，因此汇总的 PRF 是 micro 口径。
+- QA Input 先稳定 JSON 序列化，再按统一粗略 BPE 规则估算 Token；节点数直接读取 `input.nodes` 长度。Token 估算用于相对分析，不等同于特定模型 tokenizer 的精确值。
+- Token 阈值被转换为左闭右开区间，最后一个区间无上界。每个分桶只聚合其中成功评估样本，CSV 同时给出扫描数、有效数和各指标，便于核对分母。
+
+### 产物关系
+
+- `per_file_metrics.jsonl` 保存完整逐样本指标；`per_file_token_metrics.csv` 是便于 Excel 分析的扁平版本。
+- `token_metric_bins.csv/svg` 展示长度区间与效果关系；`summary.json` 保存全局和 split/task 聚合；两类错误分别进入明细及原因计数。
+
 ## 参数
 
 | 参数 | 说明 | 默认值或约束 |
@@ -69,40 +88,6 @@ python inference/batch_evaluate_qa.py --help
 - 扫描文件数、模型错误数、解析/评估错误数和有效评估数应分开理解，指标分母以代码实际纳入的有效对象为准。
 - 推理结果目录属于实验产物，不应覆盖 QA 数据源；改变预测字段名时需同步检查 `pred-keys`。
 
-## 关键接口
-
-| 接口 | 类型 | 职责 |
-|---|---|---|
-| `iter_result_files` | function | 实现该脚本的核心处理步骤。 |
-| `read_json` | function | 实现该脚本的核心处理步骤。 |
-| `stable_json_text` | function | 把 input 字段转成稳定 JSON 文本，并保留原字段顺序。 |
-| `rough_bpe_token_count` | function | 粗略估算 BPE token 数。 |
-| `input_node_count` | function | 实现该脚本的核心处理步骤。 |
-| `qa_path_for_result` | function | 实现该脚本的核心处理步骤。 |
-| `load_qa_input_stats` | function | 实现该脚本的核心处理步骤。 |
-| `find_pred_key` | function | 实现该脚本的核心处理步骤。 |
-| `safe_load_json_value` | function | 实现该脚本的核心处理步骤。 |
-| `empty_metric_accumulator` | function | 实现该脚本的核心处理步骤。 |
-| `add_prf_counter` | function | 实现该脚本的核心处理步骤。 |
-| `add_metric` | function | 实现该脚本的核心处理步骤。 |
-| `prf_from_counts` | function | 实现该脚本的核心处理步骤。 |
-| `finalize_accumulator` | function | 实现该脚本的核心处理步骤。 |
-| `write_json` | function | 实现该脚本的核心处理步骤。 |
-| `append_jsonl` | function | 实现该脚本的核心处理步骤。 |
-| `write_error_summary_csv` | function | 实现该脚本的核心处理步骤。 |
-| `write_csv` | function | 实现该脚本的核心处理步骤。 |
-| `parse_token_bins` | function | 实现该脚本的核心处理步骤。 |
-| `token_bin_label` | function | 实现该脚本的核心处理步骤。 |
-| `metric_row_values` | function | 实现该脚本的核心处理步骤。 |
-| `token_summary` | function | 实现该脚本的核心处理步骤。 |
-| `summarize_token_metric_bins` | function | 实现该脚本的核心处理步骤。 |
-| `write_token_metric_svg` | function | 写一张轻量 SVG，用于观察 token 分桶和核心指标的关系。 |
-| `print_progress` | function | 实现该脚本的核心处理步骤。 |
-| `should_print_progress` | function | 实现该脚本的核心处理步骤。 |
-| `evaluate_one_record` | function | 实现该脚本的核心处理步骤。 |
-| `run` | function | 实现该脚本的核心处理步骤。 |
-| `parse_args` | function | 实现该脚本的核心处理步骤。 |
-| `main` | function | 实现该脚本的核心处理步骤。 |
 
 ## 相关文档
 

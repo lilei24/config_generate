@@ -16,6 +16,26 @@
 4. 按配置间隔上传包含文件名、Prompt、Input、预测、答案、返回状态和单样本指标的 SwanLab 表格。
 5. 解析失败视为模型返回失败，保留错误原因，但不将无效结构加入正常评估累计。
 
+## 代码实现说明
+
+### 推理与单样本评估
+
+- 文件扫描、Prompt、调用和 JSON 解析沿用 `batch_infer_qa.py`，但每得到一个可解析回答就立即调用 `evaluate_json(model_output, answer)`。
+- `sample/*` 曲线只表示当前样本：字段路径和叶子三元组各记录 Precision、Recall、F1，另外记录值准确率、幻觉字段率和缺失字段率。
+- API 异常、样本读取失败或模型回答解析失败时，`model_returned=false`，错误原因写入本地结果和 SwanLab 表格；这些样本不会伪装成正常的零分样本。
+
+### 运行中 Eval 指标
+
+- `micro` 模式累计每个有效样本的 correct、pred total 和 gold total，再从累计计数重新计算 PRF；字段较多的样本贡献更大。
+- `macro` 模式保存每个有效样本的指标字典，并对同名指标做算术平均；每个有效样本权重相同。
+- 每处理一个样本都会以当前 step 写一次 `eval/*`，其值代表截至该 step 已成功评估样本的累计结果，而不是当前样本值，也不是除以文件序号。
+
+### SwanLab 表格与本地结果
+
+- 样本表包含 step、文件名、原始 prompt/input、预测、答案、返回状态、错误原因和单样本九项指标。
+- 表格按 `sample-table-log-interval` 周期性重新上传当前累计行，避免每个样本都创建独立图表。实验 config 同时保存 Python 版本、Git commit、脚本名和命令行参数。
+- 本地输出格式、目录和 `failures.jsonl` 与非 SwanLab 版本一致，即使 SwanLab 上传失败前已经生成的本地结果仍可用于离线评估。
+
 ## 参数
 
 | 参数 | 说明 | 默认值或约束 |
@@ -69,18 +89,6 @@ python inference/batch_infer_qa_swanlab.py --help
 - 扫描文件数、模型错误数、解析/评估错误数和有效评估数应分开理解，指标分母以代码实际纳入的有效对象为准。
 - 推理结果目录属于实验产物，不应覆盖 QA 数据源；改变预测字段名时需同步检查 `pred-keys`。
 
-## 关键接口
-
-| 接口 | 类型 | 职责 |
-|---|---|---|
-| `json_text` | function | 实现该脚本的核心处理步骤。 |
-| `sample_metric` | function | 实现该脚本的核心处理步骤。 |
-| `log_sample` | function | 实现该脚本的核心处理步骤。 |
-| `log_running_eval` | function | 实现该脚本的核心处理步骤。 |
-| `log_sample_table` | function | 实现该脚本的核心处理步骤。 |
-| `run` | function | 实现该脚本的核心处理步骤。 |
-| `parse_args` | function | 实现该脚本的核心处理步骤。 |
-| `main` | function | 实现该脚本的核心处理步骤。 |
 
 ## 相关文档
 

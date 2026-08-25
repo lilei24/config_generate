@@ -15,6 +15,13 @@
 3. 距离保留实际整数；目标节点自身已有同名配置记为 0，全图不存在记为 `inf`。
 4. 按距离聚合可评估样本的核心指标。
 
+## 代码实现说明
+
+- 目标配置名从答案根对象提取；目标节点来自 QA metadata。节点配置同时兼容 `configs` 和历史字段 `config`，每个配置对象的直接 Key 被视为顶层配置名。
+- 代码用 links 的 source/target 构造无向邻接表，从目标节点进行一次 BFS 获得其到所有可达节点的最短距离。
+- 对拥有同名顶层 Key 的节点读取 BFS 距离并取最小值。目标节点自身未被隐藏的其他配置中仍有同名 Key 时为 0；其他节点按真实 hop 记 1、2、3……；不存在可达同名 Key 时记 `inf`。
+- 每个距离组同时累计文件状态和生成指标。`inf` 表示当前 Input 全图没有可达参考，不等同于原始未裁剪图永久不存在该配置。
+
 ## 参数
 
 | 参数 | 说明 | 默认值或约束 |
@@ -66,32 +73,6 @@ python inference/analyze_neighbor_config_similarity.py --help
 - 扫描文件数、模型错误数、解析/评估错误数和有效评估数应分开理解，指标分母以代码实际纳入的有效对象为准。
 - 推理结果目录属于实验产物，不应覆盖 QA 数据源；改变预测字段名时需同步检查 `pred-keys`。
 
-## 关键接口
-
-| 接口 | 类型 | 职责 |
-|---|---|---|
-| `parse_csv_values` | function | 实现该脚本的核心处理步骤。 |
-| `iter_result_files` | function | 实现该脚本的核心处理步骤。 |
-| `qa_path_for_result` | function | 实现该脚本的核心处理步骤。 |
-| `normalize_json_value` | function | 实现该脚本的核心处理步骤。 |
-| `answer_value` | function | 实现该脚本的核心处理步骤。 |
-| `output_top_level_keys` | function | 实现该脚本的核心处理步骤。 |
-| `target_node_id` | function | 实现该脚本的核心处理步骤。 |
-| `config_items` | function | 实现该脚本的核心处理步骤。 |
-| `node_has_top_key` | function | 实现该脚本的核心处理步骤。 |
-| `graph_parts` | function | 实现该脚本的核心处理步骤。 |
-| `distances_from_target` | function | 实现该脚本的核心处理步骤。 |
-| `nearest_same_top_key_stats` | function | 实现该脚本的核心处理步骤。 |
-| `empty_metric_values` | function | 实现该脚本的核心处理步骤。 |
-| `collect_rows` | function | 实现该脚本的核心处理步骤。 |
-| `group_sort_key` | function | 实现该脚本的核心处理步骤。 |
-| `group_rows` | function | 实现该脚本的核心处理步骤。 |
-| `strip_internal_fields` | function | 实现该脚本的核心处理步骤。 |
-| `write_csv` | function | 实现该脚本的核心处理步骤。 |
-| `write_json` | function | 实现该脚本的核心处理步骤。 |
-| `run` | function | 实现该脚本的核心处理步骤。 |
-| `parse_args` | function | 实现该脚本的核心处理步骤。 |
-| `main` | function | 实现该脚本的核心处理步骤。 |
 
 ## 相关文档
 

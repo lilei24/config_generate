@@ -15,6 +15,13 @@
 3. 每 `group-size` 样本计算窗口平均，同时计算从首样本到当前组的累计平均。
 4. 输出趋势 CSV、错误表、summary 和 SVG。
 
+## 代码实现说明
+
+- 脚本用与批量推理一致的任务顺序和文件路径字典序重建 step；没有使用文件系统返回顺序或随机打乱，因此可以对齐 SwanLab 横轴。
+- 每个结果重新解析预测与答案并计算单样本指标。错误文件保留原始 step 和原因，但不进入有效指标均值。
+- `window_*` 只对当前 `group-size` 范围内的有效样本求平均，用于发现局部阶段变化；`cumulative_*` 对从第一个文件到当前组结束为止的全部有效样本求平均，用于观察整体收敛趋势。
+- 分组边界按处理文件序号形成，例如组大小 100 时为 1-100、101-200。组内有效数会单独输出，因此某组错误较多时不能只看 F1 曲线。
+
 ## 参数
 
 | 参数 | 说明 | 默认值或约束 |
@@ -63,21 +70,5 @@ python inference/analyze_inference_order_metrics.py --help
 - 扫描文件数、模型错误数、解析/评估错误数和有效评估数应分开理解，指标分母以代码实际纳入的有效对象为准。
 - 推理结果目录属于实验产物，不应覆盖 QA 数据源；改变预测字段名时需同步检查 `pred-keys`。
 
-## 关键接口
-
-| 接口 | 类型 | 职责 |
-|---|---|---|
-| `parse_csv_values` | function | 实现该脚本的核心处理步骤。 |
-| `write_csv` | function | 实现该脚本的核心处理步骤。 |
-| `write_json` | function | 实现该脚本的核心处理步骤。 |
-| `metric_values_for_prefix` | function | 实现该脚本的核心处理步骤。 |
-| `mean_metric_values` | function | 实现该脚本的核心处理步骤。 |
-| `ordered_result_files` | function | 实现该脚本的核心处理步骤。 |
-| `collect_file_rows` | function | 实现该脚本的核心处理步骤。 |
-| `group_rows` | function | 实现该脚本的核心处理步骤。 |
-| `error_rows` | function | 实现该脚本的核心处理步骤。 |
-| `write_metric_svg` | function | 实现该脚本的核心处理步骤。 |
-| `run` | function | 实现该脚本的核心处理步骤。 |
-| `parse_args` | function | 实现该脚本的核心处理步骤。 |
 
 [返回 inference 脚本索引](README.md)

@@ -14,6 +14,12 @@
 2. 复用外部 API 的 system message、thinking 控制、请求等待和 SwanLab 日志。
 3. 命令行参数与 `batch_infer_llm_api_swanlab.py` 一致。
 
+## 代码实现说明
+
+- 当前文件组合两个已有能力：由 `batch_infer_qa_mask_value.py` 提供 Key 骨架 Prompt，由 `batch_infer_llm_api_swanlab.py` 提供外部 API 调用和实验记录。
+- 叶子值全部隐藏，数组长度和嵌套 Key 保留；回答仍解析为完整 JSON，并使用相同的字段路径、叶子三元组和值准确率指标。
+- system Prompt、远端 thinking 参数兼容开关、响应后等待、错误分类、micro/macro 模式和 SwanLab 表格均继承外部 API 版本。
+
 ## 参数
 
 | 参数 | 说明 | 默认值或约束 |
@@ -58,13 +64,6 @@ python inference/batch_infer_llm_api_swanlab_mask_value.py --help
 - 扫描文件数、模型错误数、解析/评估错误数和有效评估数应分开理解，指标分母以代码实际纳入的有效对象为准。
 - 推理结果目录属于实验产物，不应覆盖 QA 数据源；改变预测字段名时需同步检查 `pred-keys`。
 
-## 关键接口
-
-| 接口 | 类型 | 职责 |
-|---|---|---|
-| `run` | function | 实现该脚本的核心处理步骤。 |
-| `parse_args` | function | 实现该脚本的核心处理步骤。 |
-| `main` | function | 实现该脚本的核心处理步骤。 |
 
 ## 相关文档
 

@@ -15,6 +15,13 @@
 3. 按顶层 Key 聚合结构数量、样本数量和占比。
 4. 单独输出坏 JSON、缺字段等异常。
 
+## 代码实现说明
+
+- 分析对象是 QA 的 `output`，即被隐藏并要求模型生成的完整配置对象，不读取 `model-output`，因此结果描述的是数据集答案结构而非模型行为。
+- 遍历 JSON 时记录所有对象字段和数组层级。数组元素使用统一 `[]` 表示，使相同 Schema 但数组长度不同的样本可以归为同一结构；叶子路径同时保留 JSON 类型信息。
+- 规范路径列表经过排序和稳定序列化后计算 structure id。同一个顶层 Key 下 structure id 相同即视为同一结构，并累计 sample count 和占该 Key 的比例。
+- 逐文件表用于回查具体样本；distribution 表用于筛选高频结构；paths JSON 保存 structure id 到完整 Path 的映射；错误表区分坏 JSON、缺 output 和不支持的结构。
+
 ## 参数
 
 | 参数 | 说明 | 默认值或约束 |
@@ -61,32 +68,6 @@ python inference/analyze_output_structures.py --help
 - 扫描文件数、模型错误数、解析/评估错误数和有效评估数应分开理解，指标分母以代码实际纳入的有效对象为准。
 - 推理结果目录属于实验产物，不应覆盖 QA 数据源；改变预测字段名时需同步检查 `pred-keys`。
 
-## 关键接口
-
-| 接口 | 类型 | 职责 |
-|---|---|---|
-| `StructureRow` | class | 实现该脚本的核心处理步骤。 |
-| `parse_csv_values` | function | 实现该脚本的核心处理步骤。 |
-| `iter_qa_files` | function | Enumerate QA files as qa_root/<split>/<task>/**/*.json. |
-| `read_json` | function | 实现该脚本的核心处理步骤。 |
-| `escape_path_key` | function | 实现该脚本的核心处理步骤。 |
-| `collect_structure_paths` | function | Collect unique JSON paths for one top-level key. |
-| `structure_id` | function | 实现该脚本的核心处理步骤。 |
-| `collect_rows` | function | 实现该脚本的核心处理步骤。 |
-| `paths_text` | function | 实现该脚本的核心处理步骤。 |
-| `per_file_rows` | function | 实现该脚本的核心处理步骤。 |
-| `valid_rows` | function | 实现该脚本的核心处理步骤。 |
-| `structure_counts` | function | 实现该脚本的核心处理步骤。 |
-| `top_key_counts` | function | 实现该脚本的核心处理步骤。 |
-| `structure_paths_map` | function | 实现该脚本的核心处理步骤。 |
-| `build_distribution_rows` | function | 实现该脚本的核心处理步骤。 |
-| `build_top_key_summary_rows` | function | 实现该脚本的核心处理步骤。 |
-| `build_structure_paths_json` | function | 实现该脚本的核心处理步骤。 |
-| `build_error_rows` | function | 实现该脚本的核心处理步骤。 |
-| `write_csv` | function | 实现该脚本的核心处理步骤。 |
-| `write_json` | function | 实现该脚本的核心处理步骤。 |
-| `run` | function | 实现该脚本的核心处理步骤。 |
-| `parse_args` | function | 实现该脚本的核心处理步骤。 |
 
 ## 相关文档
 

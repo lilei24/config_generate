@@ -15,6 +15,14 @@
 3. 输出长度、root key 及二者交叉的指标；热力图单元显示指标和样本数。
 4. 支持最小样本数过滤、指定绘图指标和图中 Info 文本。
 
+## 代码实现说明
+
+- 脚本从原 QA 读取 `input`，使用排序稳定的 JSON 文本和项目粗略 BPE 规则估算上下文 Token；Prompt 固定说明文字和模型输出 Token 不计入该数值。
+- 阈值列表生成有序区间，例如 4096、8192 对应 `<4K`、`4K-8K` 等；边界和标签由同一函数产生，CSV 与热力图列顺序保持一致。
+- 单样本同时记录 Input 字符数、粗略 Token、节点数、答案 root key 和生成指标。随后分别按长度、root key、`长度 × root key` 三种粒度聚合。
+- 热力图横轴为长度区间，纵轴为 root key；颜色由 `plot-metric` 决定，单元格文字同时显示指标值和有效样本数。低于 `heatmap-min-files` 的格子不显示指标，`heatmap-info` 被绘制在图底部空白区。
+- `--no-heatmap` 只关闭 SVG，不影响逐文件 CSV、三张聚合 CSV 和 summary 输出。
+
 ## 参数
 
 | 参数 | 说明 | 默认值或约束 |
@@ -74,50 +82,6 @@ python inference/analyze_inputLength_rootkey.py --help
 - 扫描文件数、模型错误数、解析/评估错误数和有效评估数应分开理解，指标分母以代码实际纳入的有效对象为准。
 - 推理结果目录属于实验产物，不应覆盖 QA 数据源；改变预测字段名时需同步检查 `pred-keys`。
 
-## 关键接口
-
-| 接口 | 类型 | 职责 |
-|---|---|---|
-| `evaluate_json` | function | 实现该脚本的核心处理步骤。 |
-| `empty_metric_accumulator` | function | 实现该脚本的核心处理步骤。 |
-| `add_metric` | function | 实现该脚本的核心处理步骤。 |
-| `finalize_accumulator` | function | 实现该脚本的核心处理步骤。 |
-| `metric_row_values` | function | 实现该脚本的核心处理步骤。 |
-| `parse_csv_values` | function | 实现该脚本的核心处理步骤。 |
-| `parse_int_csv` | function | 实现该脚本的核心处理步骤。 |
-| `read_json` | function | 实现该脚本的核心处理步骤。 |
-| `write_csv` | function | 实现该脚本的核心处理步骤。 |
-| `write_json` | function | 实现该脚本的核心处理步骤。 |
-| `iter_result_files` | function | 实现该脚本的核心处理步骤。 |
-| `qa_path_for_result` | function | 实现该脚本的核心处理步骤。 |
-| `stable_json_text` | function | 实现该脚本的核心处理步骤。 |
-| `rough_bpe_token_count` | function | 实现该脚本的核心处理步骤。 |
-| `quantile` | function | 实现该脚本的核心处理步骤。 |
-| `numeric_stats` | function | 实现该脚本的核心处理步骤。 |
-| `input_token_group` | function | 实现该脚本的核心处理步骤。 |
-| `compact_token_label` | function | 实现该脚本的核心处理步骤。 |
-| `compact_token_group_label` | function | 实现该脚本的核心处理步骤。 |
-| `input_length_values` | function | 实现该脚本的核心处理步骤。 |
-| `evaluate_one_record` | function | 实现该脚本的核心处理步骤。 |
-| `answer_value` | function | 实现该脚本的核心处理步骤。 |
-| `output_top_level_keys` | function | 实现该脚本的核心处理步骤。 |
-| `target_top_level_key` | function | 实现该脚本的核心处理步骤。 |
-| `empty_metric_values` | function | 实现该脚本的核心处理步骤。 |
-| `collect_rows` | function | 实现该脚本的核心处理步骤。 |
-| `group_by_input_length` | function | 实现该脚本的核心处理步骤。 |
-| `group_by_input_length_rootkey` | function | 实现该脚本的核心处理步骤。 |
-| `group_by_rootkey` | function | 实现该脚本的核心处理步骤。 |
-| `strip_internal_fields` | function | 实现该脚本的核心处理步骤。 |
-| `metric_label` | function | 实现该脚本的核心处理步骤。 |
-| `metric_value` | function | 实现该脚本的核心处理步骤。 |
-| `color_for_value` | function | 实现该脚本的核心处理步骤。 |
-| `wrap_text` | function | 实现该脚本的核心处理步骤。 |
-| `text_color_for_value` | function | 实现该脚本的核心处理步骤。 |
-| `build_heatmap_matrix` | function | 实现该脚本的核心处理步骤。 |
-| `write_input_length_rootkey_heatmap` | function | 实现该脚本的核心处理步骤。 |
-| `run` | function | 实现该脚本的核心处理步骤。 |
-| `parse_args` | function | 实现该脚本的核心处理步骤。 |
-| `main` | function | 实现该脚本的核心处理步骤。 |
 
 ## 相关文档
 

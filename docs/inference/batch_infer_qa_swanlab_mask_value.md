@@ -14,6 +14,12 @@
 2. 复用 SwanLab 推理脚本的调用、评估、表格和错误处理。
 3. 命令行参数与 `batch_infer_qa_swanlab.py` 完全一致。
 
+## 代码实现说明
+
+- 该入口不重新实现推理循环，而是在运行前把 SwanLab 基础脚本使用的 Prompt 构造器替换为 `batch_infer_qa_mask_value.build_user_prompt`。
+- 目标答案先转成完整嵌套 Key 骨架，所有叶子值被占位符隐藏；模型仍返回完整 JSON，因此单样本指标、micro/macro 累计和表格字段无需修改。
+- 输入顺序、错误定义、结果路径、SwanLab step 和表格上传间隔均与 `batch_infer_qa_swanlab.py` 相同。实验对比时应使用相同 split、模型和采样参数，只改变任务入口。
+
 ## 参数
 
 | 参数 | 说明 | 默认值或约束 |
@@ -56,13 +62,6 @@ python inference/batch_infer_qa_swanlab_mask_value.py --help
 - 扫描文件数、模型错误数、解析/评估错误数和有效评估数应分开理解，指标分母以代码实际纳入的有效对象为准。
 - 推理结果目录属于实验产物，不应覆盖 QA 数据源；改变预测字段名时需同步检查 `pred-keys`。
 
-## 关键接口
-
-| 接口 | 类型 | 职责 |
-|---|---|---|
-| `run` | function | 实现该脚本的核心处理步骤。 |
-| `parse_args` | function | 实现该脚本的核心处理步骤。 |
-| `main` | function | 实现该脚本的核心处理步骤。 |
 
 ## 相关文档
 

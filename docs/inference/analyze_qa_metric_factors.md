@@ -16,6 +16,14 @@
 4. 按可配置边界分桶，并额外按答案顶层 Key 细分聚合。
 5. 所有分桶同时输出样本数和核心生成指标。
 
+## 代码实现说明
+
+- 推理结果先与同 split/task/相对路径的 QA 对齐。答案顶层 Key 来自 `answer`，目标节点优先从 `metadata.target.node_id` 获取，Input 负责提供保留后的 nodes、links 和 configs/config。
+- 答案 Path 出现次数是“当前样本内”统计：先展开该样本答案的每条字段路径，再扫描同一样本 Input 的全部路径 Counter，记录每条答案 Path 在 Input 中出现多少次，而不是跨数据集做全局词频。
+- 目标节点可见顶层 Key 数只统计其未隐藏配置；所有节点可见 Key 数则遍历 `input.nodes` 累加。二者可继续按答案 top-level key 细分，区分结构参考不足与上下文干扰。
+- 邻居数在 Input 无向图上从目标节点 BFS：1-hop 是距离不超过 1 的其他节点，2-hop 包含 1-hop，3-hop 包含前两层。节点总数直接取有效 node 对象数量。
+- 数值因素按命令行边界形成有序区间；每个分组使用成功评估样本累计指标，并保留 total/evaluated/error 数，避免把稀疏组的偶然高分当成稳定结论。
+
 ## 参数
 
 | 参数 | 说明 | 默认值或约束 |
@@ -77,38 +85,5 @@ python inference/analyze_qa_metric_factors.py --help
 - 扫描文件数、模型错误数、解析/评估错误数和有效评估数应分开理解，指标分母以代码实际纳入的有效对象为准。
 - 推理结果目录属于实验产物，不应覆盖 QA 数据源；改变预测字段名时需同步检查 `pred-keys`。
 
-## 关键接口
-
-| 接口 | 类型 | 职责 |
-|---|---|---|
-| `parse_csv_values` | function | 实现该脚本的核心处理步骤。 |
-| `parse_int_csv` | function | 实现该脚本的核心处理步骤。 |
-| `iter_result_files` | function | 实现该脚本的核心处理步骤。 |
-| `qa_path_for_result` | function | 实现该脚本的核心处理步骤。 |
-| `normalize_json_value` | function | 实现该脚本的核心处理步骤。 |
-| `answer_value` | function | 实现该脚本的核心处理步骤。 |
-| `collect_field_paths` | function | Collect field paths as key tuples; array positions use the [] marker. |
-| `path_text` | function | 实现该脚本的核心处理步骤。 |
-| `path_endswith` | function | 实现该脚本的核心处理步骤。 |
-| `answer_path_occurrences` | function | 实现该脚本的核心处理步骤。 |
-| `top_level_keys` | function | 实现该脚本的核心处理步骤。 |
-| `config_items` | function | 实现该脚本的核心处理步骤。 |
-| `visible_top_key_count` | function | 实现该脚本的核心处理步骤。 |
-| `target_hop_neighbor_counts` | function | 统计目标节点最短路径距离不超过 1、2、3 的累计节点数量。 |
-| `node_factor_values` | function | 实现该脚本的核心处理步骤。 |
-| `empty_metric_values` | function | 实现该脚本的核心处理步骤。 |
-| `bin_label` | function | 实现该脚本的核心处理步骤。 |
-| `collect_rows` | function | 实现该脚本的核心处理步骤。 |
-| `group_rows` | function | 实现该脚本的核心处理步骤。 |
-| `group_rows_by_top_level_key` | function | 实现该脚本的核心处理步骤。 |
-| `exact_grouper` | function | 实现该脚本的核心处理步骤。 |
-| `numeric_bin_grouper` | function | 实现该脚本的核心处理步骤。 |
-| `write_csv` | function | 实现该脚本的核心处理步骤。 |
-| `write_json` | function | 实现该脚本的核心处理步骤。 |
-| `write_metric_svg` | function | 实现该脚本的核心处理步骤。 |
-| `strip_internal_fields` | function | 实现该脚本的核心处理步骤。 |
-| `remove_deprecated_outputs` | function | 实现该脚本的核心处理步骤。 |
-| `run` | function | 实现该脚本的核心处理步骤。 |
-| `parse_args` | function | 实现该脚本的核心处理步骤。 |
 
 [返回 inference 脚本索引](README.md)

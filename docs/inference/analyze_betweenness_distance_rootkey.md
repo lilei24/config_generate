@@ -14,6 +14,13 @@
 2. 按三个维度组合分组并保留每格有效样本数。
 3. 使用累计 Counter 计算组内 micro PRF 和其他汇总指标。
 
+## 代码实现说明
+
+- 该脚本在单样本阶段同时计算三个解释变量：目标节点归一化中介中心性分组、最近同名配置节点的 BFS 距离、答案顶层 Key。
+- 图只使用 Input 当前保留的 nodes/links，因此结果反映实际提供给模型的拓扑，而不是裁剪前原始站点。
+- 聚合键为 `split + task + betweenness_group + distance + root_key`。每个单元格累计有效样本的 Counter 原始计数，再计算字段路径和叶子三元组 micro PRF。
+- 逐文件 CSV 用于确认目标节点、原始中心性、距离和 root key；三层聚合 CSV 是 combined heatmap 的直接输入。稀疏组合需要结合样本数过滤。
+
 ## 参数
 
 | 参数 | 说明 | 默认值或约束 |
@@ -65,42 +72,6 @@ python inference/analyze_betweenness_distance_rootkey.py --help
 - 扫描文件数、模型错误数、解析/评估错误数和有效评估数应分开理解，指标分母以代码实际纳入的有效对象为准。
 - 推理结果目录属于实验产物，不应覆盖 QA 数据源；改变预测字段名时需同步检查 `pred-keys`。
 
-## 关键接口
-
-| 接口 | 类型 | 职责 |
-|---|---|---|
-| `evaluate_json` | function | 实现该脚本的核心处理步骤。 |
-| `empty_metric_accumulator` | function | 实现该脚本的核心处理步骤。 |
-| `add_metric` | function | 实现该脚本的核心处理步骤。 |
-| `finalize_accumulator` | function | 实现该脚本的核心处理步骤。 |
-| `metric_row_values` | function | 实现该脚本的核心处理步骤。 |
-| `evaluate_one_record` | function | 实现该脚本的核心处理步骤。 |
-| `parse_csv_values` | function | 实现该脚本的核心处理步骤。 |
-| `read_json` | function | 实现该脚本的核心处理步骤。 |
-| `write_csv` | function | 实现该脚本的核心处理步骤。 |
-| `write_json` | function | 实现该脚本的核心处理步骤。 |
-| `iter_result_files` | function | 实现该脚本的核心处理步骤。 |
-| `qa_path_for_result` | function | 实现该脚本的核心处理步骤。 |
-| `graph_parts` | function | 实现该脚本的核心处理步骤。 |
-| `shortest_distances` | function | 实现该脚本的核心处理步骤。 |
-| `component_nodes` | function | 实现该脚本的核心处理步骤。 |
-| `betweenness_centrality` | function | 实现该脚本的核心处理步骤。 |
-| `betweenness_group` | function | 实现该脚本的核心处理步骤。 |
-| `topology_values` | function | 实现该脚本的核心处理步骤。 |
-| `target_node_id` | function | 实现该脚本的核心处理步骤。 |
-| `config_items` | function | 实现该脚本的核心处理步骤。 |
-| `node_has_top_key` | function | 实现该脚本的核心处理步骤。 |
-| `distances_from_target` | function | 实现该脚本的核心处理步骤。 |
-| `nearest_same_top_key_stats` | function | 实现该脚本的核心处理步骤。 |
-| `answer_value` | function | 实现该脚本的核心处理步骤。 |
-| `output_top_level_keys` | function | 实现该脚本的核心处理步骤。 |
-| `empty_metric_values` | function | 实现该脚本的核心处理步骤。 |
-| `collect_rows` | function | 实现该脚本的核心处理步骤。 |
-| `group_rows_three_level` | function | Group by (split, task, betweenness_centrality_group, nearest_same_top_key_distance, target_top_level_key). |
-| `strip_internal_fields` | function | 实现该脚本的核心处理步骤。 |
-| `run` | function | 实现该脚本的核心处理步骤。 |
-| `parse_args` | function | 实现该脚本的核心处理步骤。 |
-| `main` | function | 实现该脚本的核心处理步骤。 |
 
 ## 相关文档
 

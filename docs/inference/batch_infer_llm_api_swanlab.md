@@ -16,6 +16,20 @@
 4. 逐样本解析、评估并写入本地结果，同时记录 SwanLab sample/eval 指标与表格。
 5. 请求、读取和解析错误分别保留，便于统计外部服务可靠性。
 
+## 代码实现说明
+
+### 外部 API 请求
+
+- 客户端仍使用 OpenAI SDK，但 message 分为 system 和 user 两条；`--system-prompt` 可设置服务级角色说明，user 内容复用标准配置生成 Prompt。
+- 默认向 `extra_body` 写入 `chat_template_kwargs.enable_thinking=false`。如果远端网关不接受额外字段，可传 `--no-disable-thinking-extra-body` 完全移除该参数。
+- 收到一次 API 返回后，程序在 `finally` 路径按 `post-response-wait-seconds` 等待，再处理下一个样本；该等待用于限流和服务稳定性，不计入模型回答内容。
+
+### 指标与错误语义
+
+- 正常文本仍需通过 JSON 解析才算 `model_returned=true`。有文本但结构无法解析时状态为 false，并保留原始返回和 parse error。
+- 可评估样本按 `eval-metric-mode` 进入 micro 累计计数或 macro 样本均值；失败样本只进入处理进度、失败统计和样本表，不进入有效评估分母。
+- 本地结果使用外部模型专属默认目录，防止覆盖本地 vLLM 实验；SwanLab config 会记录 URL、模型、温度、等待时间和 thinking 控制方式。
+
 ## 参数
 
 | 参数 | 说明 | 默认值或约束 |
@@ -78,19 +92,6 @@ python inference/batch_infer_llm_api_swanlab.py --help
 - 扫描文件数、模型错误数、解析/评估错误数和有效评估数应分开理解，指标分母以代码实际纳入的有效对象为准。
 - 推理结果目录属于实验产物，不应覆盖 QA 数据源；改变预测字段名时需同步检查 `pred-keys`。
 
-## 关键接口
-
-| 接口 | 类型 | 职责 |
-|---|---|---|
-| `json_text` | function | 实现该脚本的核心处理步骤。 |
-| `sample_metric` | function | 实现该脚本的核心处理步骤。 |
-| `chat_completion` | function | 实现该脚本的核心处理步骤。 |
-| `log_sample` | function | 实现该脚本的核心处理步骤。 |
-| `log_running_eval` | function | 实现该脚本的核心处理步骤。 |
-| `log_sample_table` | function | 实现该脚本的核心处理步骤。 |
-| `run` | function | 实现该脚本的核心处理步骤。 |
-| `parse_args` | function | 实现该脚本的核心处理步骤。 |
-| `main` | function | 实现该脚本的核心处理步骤。 |
 
 ## 相关文档
 
