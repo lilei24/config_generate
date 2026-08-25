@@ -1,5 +1,10 @@
 # README
 
+## 运行环境
+
+- 运行位置：服务器 Docker 容器
+- Conda 环境：`config_generate`
+
 ## 重点代码
 
 ### inference
