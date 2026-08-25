@@ -20,7 +20,7 @@
 配置生成数据集主要使用以下两个脚本：
 
 | 构建方式 | 代码 | 作用 |
-|---|---|
+|---|---|---|
 | 构建完整上下文数据集 | [`scripts/build_config_generation_dataset.py`](scripts/build_config_generation_dataset.md) | 从原始拓扑中选择待预测配置，构造 node 和 deviceGroup 两类 QA 数据。 |
 | 构建 Token 受限数据集 | [`scripts/build_config_generation_dataset_pruned.py`](scripts/build_config_generation_dataset_pruned.md) | 对超过指定 Input Token 阈值的图删除部分远距离节点，再选择待预测配置并构造 QA 数据。 |
 
