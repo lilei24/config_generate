@@ -34,15 +34,7 @@
 | `--min-files` | 每个绘图分组至少需要的有效样本数。 | 默认：`3` |
 | `--plots` | 逗号分隔的图类型。 | 默认：`'heatmap,bar-grid,bar-all'` |
 
-路径参数相对于执行命令时的当前工作目录解析；运行 `--help` 可查看代码中的即时说明。
 
-## 运行方式
-
-```bash
-python inference/plot_distance_rootkey.py --help
-```
-
-建议先用 `--limit` 小规模验证路径、服务和输出格式，再运行完整 split。
 
 ## 输入与输出
 

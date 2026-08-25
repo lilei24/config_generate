@@ -43,7 +43,6 @@
 | `--swanlab-log-step` | Step used when logging aggregate evaluation metrics. | 默认：`DEFAULT_SWANLAB_LOG_STEP` |
 | `--swanlab-log-prefix` | Metric namespace prefix for evaluation logs. Default: eval. | 默认：`DEFAULT_SWANLAB_LOG_PREFIX` |
 
-路径参数相对于执行命令时的当前工作目录解析；运行 `--help` 可查看代码中的即时说明。
 
 ### 关键默认值
 
@@ -55,13 +54,6 @@
 | `DEFAULT_SWANLAB_LOG_STEP` | `0` |
 | `DEFAULT_SWANLAB_LOG_PREFIX` | `'eval'` |
 
-## 运行方式
-
-```bash
-python inference/batch_evaluate_qa_swanlab.py --help
-```
-
-建议先用 `--limit` 小规模验证路径、服务和输出格式，再运行完整 split。
 
 ## 输入与输出
 

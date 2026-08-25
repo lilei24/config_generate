@@ -43,7 +43,6 @@
 | `--progress-interval` | 每处理多少个文件打印一次进度；非正数通常表示关闭周期打印。 | 默认：`DEFAULT_PROGRESS_INTERVAL` |
 | `--limit` | 最多处理的文件数；`0` 表示不限制。 | 默认：`0` |
 
-路径参数相对于执行命令时的当前工作目录解析；运行 `--help` 可查看代码中的即时说明。
 
 ### 关键默认值
 
@@ -60,13 +59,6 @@
 | `DEFAULT_INPUT_LENGTH_THRESHOLDS` | `'4096,8192,16384,32768,65536,131072,262144,524288'` |
 | `DEFAULT_PLOT_METRIC` | `'leaf_triple_f1'` |
 
-## 运行方式
-
-```bash
-python inference/analyze_inputLength_rootkey.py --help
-```
-
-建议先用 `--limit` 小规模验证路径、服务和输出格式，再运行完整 split。
 
 ## 输入与输出
 

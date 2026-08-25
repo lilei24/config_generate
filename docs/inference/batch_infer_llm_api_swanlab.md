@@ -53,7 +53,6 @@
 | `--eval-metric-mode` | 累计 eval 口径：`micro` 汇总计数后计算，`macro` 对有效样本指标求平均。 | 默认：`DEFAULT_EVAL_METRIC_MODE`；可选：`['micro', 'macro']` |
 | `--sample-table-log-interval` | 每累计多少个样本重新上传一次样本表。 | 默认：`DEFAULT_SAMPLE_TABLE_LOG_INTERVAL` |
 
-路径参数相对于执行命令时的当前工作目录解析；运行 `--help` 可查看代码中的即时说明。
 
 ### 关键默认值
 
@@ -72,13 +71,6 @@
 | `DEFAULT_POST_RESPONSE_WAIT_SECONDS` | `5.0` |
 | `DEFAULT_EVAL_METRIC_MODE` | `'micro'` |
 
-## 运行方式
-
-```bash
-python inference/batch_infer_llm_api_swanlab.py --help
-```
-
-建议先用 `--limit` 小规模验证路径、服务和输出格式，再运行完整 split。
 
 ## 输入与输出
 

@@ -32,7 +32,6 @@
 | `--splits` | 逗号分隔的数据划分，例如 `train,val`。 | 默认：`''` |
 | `--tasks` | 逗号分隔的任务目录，例如 `node_config_qa,device_config_qa`。 | 默认：`''` |
 
-路径参数相对于执行命令时的当前工作目录解析；运行 `--help` 可查看代码中的即时说明。
 
 ### 关键默认值
 
@@ -43,13 +42,6 @@
 | `DEFAULT_MIN_SAMPLE_COUNT` | `5` |
 | `VALUE_PLACEHOLDER` | `'<VALUE>'` |
 
-## 运行方式
-
-```bash
-python inference/build_structure_hints_from_csv.py --help
-```
-
-建议先用 `--limit` 小规模验证路径、服务和输出格式，再运行完整 split。
 
 ## 输入与输出
 

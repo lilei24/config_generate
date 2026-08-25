@@ -38,7 +38,6 @@
 | `--swanlab-experiment` | SwanLab 实验名。 | 默认：`DEFAULT_SWANLAB_EXPERIMENT` |
 | `--swanlab-mode` | SwanLab 运行模式，例如 `cloud` 或本地模式。 | 默认：`DEFAULT_SWANLAB_MODE` |
 
-路径参数相对于执行命令时的当前工作目录解析；运行 `--help` 可查看代码中的即时说明。
 
 ### 关键默认值
 
@@ -54,13 +53,6 @@
 | `DEFAULT_SWANLAB_EXPERIMENT` | `'offline-macro-metrics'` |
 | `DEFAULT_SWANLAB_MODE` | `'cloud'` |
 
-## 运行方式
-
-```bash
-python inference/upload_macro_metrics_swanlab.py --help
-```
-
-建议先用 `--limit` 小规模验证路径、服务和输出格式，再运行完整 split。
 
 ## 输入与输出
 
