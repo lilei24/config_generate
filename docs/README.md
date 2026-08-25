@@ -1,10 +1,12 @@
 # config_generate 推理分支文档中心
 
-本文档对应 `inference` 分支，覆盖配置生成批量推理、离线评估、SwanLab 实验、误差因素分析和结果绘图。文档目录按照代码目录组织，便于从业务任务定位到具体脚本。
+本文档对应 `inference` 分支，主要包含配置生成数据集构造、模型推理、SwanLab 评估和结果分析代码。
 
 ## 重点代码
 
-配置生成推理直接使用以下两个脚本：
+### inference
+
+配置生成推理主要使用以下两个脚本：
 
 | 推理方式 | 代码 | 作用 |
 |---|---|---|
@@ -13,19 +15,16 @@
 
 这两个脚本都会在推理过程中使用 `model-output` 和 `answer` 计算单样本指标及截至当前 step 的累计指标，并上传到 SwanLab。常规配置生成实验直接选择其中一个脚本即可，不需要再单独运行评估脚本。
 
-离线评估代码主要用于重新分析历史推理结果、生成本地 CSV，或研究 Input Token 与指标之间的关系，不是完成常规 SwanLab 推理实验的必需步骤。
+### scripts
 
-## 快速导航
+配置生成数据集主要使用以下两个脚本：
 
-| 入口 | 内容 |
+| 构建方式 | 代码 | 作用 |
 |---|---|
-| [配置生成数据集构造](scripts/README.md) | 从原始拓扑生成 QA、构造前 Token 裁剪及已有 QA 二次裁剪 |
-| [inference 脚本索引](inference/README.md) | 25 个 Python 文件的一对一文档与分类导航 |
-| [配置生成指标](guides/metrics.md) | field path、leaf triple、value accuracy、幻觉率、micro/macro 口径 |
-| [目录与结果格式](guides/result-layout.md) | QA 输入、推理结果、错误日志和分析目录约定 |
+| 构建完整上下文数据集 | [`scripts/build_config_generation_dataset.py`](scripts/build_config_generation_dataset.md) | 从原始拓扑中选择待预测配置，构造 node 和 deviceGroup 两类 QA 数据。 |
+| 构建 Token 受限数据集 | [`scripts/build_config_generation_dataset_pruned.py`](scripts/build_config_generation_dataset_pruned.md) | 对超过指定 Input Token 阈值的图删除部分远距离节点，再选择待预测配置并构造 QA 数据。 |
 
-## 维护约定
+## 目录说明
 
-- `scripts/*.py`、`inference/*.py` 分别与对应文档目录中的 Markdown 保持同名一一对应。
-- 修改 Prompt、默认路径、命令行参数、结果字段或指标分母时，同步更新相应文档。
-- `docs/` 是正式版本化文档目录；模型结果、CSV、SVG 和 SwanLab 本地日志写入实验输出目录。
+- [`inference/`](inference/README.md)：模型推理、SwanLab 指标记录、离线评估、实验因素分析和结果绘图。
+- [`scripts/`](scripts/README.md)：从原始拓扑构造配置生成 QA，以及对已有 QA 的 Input 进行节点裁剪。

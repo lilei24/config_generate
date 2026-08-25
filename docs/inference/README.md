@@ -68,6 +68,3 @@
 ## 上层导航
 
 - [文档中心](../README.md)
-- [推理与评估工作流](../guides/inference-workflow.md)
-- [配置生成指标](../guides/metrics.md)
-- [目录与结果格式](../guides/result-layout.md)
