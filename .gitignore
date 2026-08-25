@@ -2,6 +2,8 @@
 .codex/
 agent/
 doc/
+!docs/
+!docs/**
 .temp/
 config_generation_dataset/
 shortest_path_dataset/
