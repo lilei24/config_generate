@@ -2,6 +2,8 @@
 
 ## QA 输入
 
+QA 可由 `scripts/build_config_generation_dataset.py` 或其裁剪版本从原始 `datasets/train|val` 生成。
+
 ```text
 520QA/
   train/
