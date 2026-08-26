@@ -4,7 +4,7 @@
 
 ## 功能与业务价值
 
-为原始拓扑数据集生成无需外部依赖的交互式 HTML 可视化。
+为原始拓扑或任务数据集生成无需外部依赖的交互式 HTML 可视化。
 
 **业务价值：** 让不熟悉原始 JSON 的人员快速检查设备角色、类型、连通分量和拓扑异常。
 
@@ -21,8 +21,8 @@
 | `dataset_root` | 数据集根目录。默认：datasets |
 | `-h, --help` | 显示当前脚本的完整命令帮助后退出。 |
 | `-o OUTPUT_ROOT, --output-root OUTPUT_ROOT` | 可视化输出目录。默认：/tmp/topology_visualizations |
-| `--split {train,val,all}` | 处理 train、val 或全部数据。默认：all |
-| `--max-files MAX_FILES` | 每个 split 最多处理的文件数，默认不限制。 |
+| `--split {train,val,with_answer,without_answer,all}` | 选择数据集根目录下需要处理的目录；`all` 会依次检查四个目录。默认：all |
+| `--max-files MAX_FILES` | 每个所选目录最多处理的文件数，默认不限制。 |
 | `--progress-interval PROGRESS_INTERVAL` | 每处理 N 个文件打印一次进度，0 表示关闭。默认：20 |
 
 参数表以当前代码的 `--help` 为准。路径参数均相对于运行命令所在目录解析。
@@ -34,6 +34,7 @@
 | `DEFAULT_DATASET_ROOT` | `'datasets'` |
 | `DEFAULT_OUTPUT_ROOT` | `'/tmp/topology_visualizations'` |
 | `DEFAULT_PROGRESS_INTERVAL` | `20` |
+| `DATA_DIRECTORY_CHOICES` | `('train', 'val', 'with_answer', 'without_answer')` |
 
 ## 运行方式
 
@@ -68,6 +69,7 @@ python topology_visualizer/generate_topology_visualizations.py --help
 ## 输入、输出与口径
 
 - 输入字段、候选筛选和异常状态以“核心逻辑”及源码校验条件为准。
+- 选择 `with_answer` 或 `without_answer` 时会递归读取其内部目录，因此可以直接处理其中的 `train/val/*.json`。
 - 输出为静态 HTML，可直接在浏览器打开，不依赖 CDN 或后端服务。
 - 可视化用于人工检查，不改变原始拓扑或任务答案。
 

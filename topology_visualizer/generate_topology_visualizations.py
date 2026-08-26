@@ -18,6 +18,7 @@ from typing import Any, Iterable
 DEFAULT_DATASET_ROOT = Path("datasets")
 DEFAULT_OUTPUT_ROOT = Path("/tmp/topology_visualizations")
 DEFAULT_PROGRESS_INTERVAL = 20
+DATA_DIRECTORY_CHOICES = ("train", "val", "with_answer", "without_answer")
 MISSING_NAME = "<missing>"
 MISSING_ROLE = "<missing>"
 MISSING_TYPE = "<missing>"
@@ -618,7 +619,7 @@ def output_html_path(output_root: Path, graph: GraphData) -> Path:
 def build_visualizations(args: argparse.Namespace) -> None:
     dataset_root = args.dataset_root.resolve()
     output_root = args.output_root.resolve()
-    splits = ["train", "val"] if args.split == "all" else [args.split]
+    splits = list(DATA_DIRECTORY_CHOICES) if args.split == "all" else [args.split]
     all_records: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
 
@@ -713,7 +714,10 @@ def build_visualizations(args: argparse.Namespace) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="为原始 train/val 拓扑 JSON 生成交互式 HTML 可视化。"
+        description=(
+            "为 train、val、with_answer 或 without_answer 目录中的拓扑 JSON "
+            "生成交互式 HTML 可视化。"
+        )
     )
     parser.add_argument(
         "dataset_root",
@@ -731,15 +735,18 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--split",
-        choices=["train", "val", "all"],
+        choices=[*DATA_DIRECTORY_CHOICES, "all"],
         default="all",
-        help="处理 train、val 或全部数据。默认：all",
+        help=(
+            "选择 dataset_root 下的 train、val、with_answer 或 without_answer "
+            "目录；all 表示依次检查全部四个目录。默认：all"
+        ),
     )
     parser.add_argument(
         "--max-files",
         type=int,
         default=None,
-        help="每个 split 最多处理的文件数，默认不限制。",
+        help="每个所选目录最多处理的文件数，默认不限制。",
     )
     parser.add_argument(
         "--progress-interval",

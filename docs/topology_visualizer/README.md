@@ -6,7 +6,7 @@
 
 | 脚本 | 功能 |
 |---|---|
-| [generate_topology_visualizations.py](generate_topology_visualizations.md) | 为原始拓扑数据集生成无需外部依赖的交互式 HTML 可视化。 |
+| [generate_topology_visualizations.py](generate_topology_visualizations.md) | 为 `train`、`val`、`with_answer` 或 `without_answer` 中的拓扑 JSON 生成交互式 HTML。 |
 
 ## 使用原则
 
