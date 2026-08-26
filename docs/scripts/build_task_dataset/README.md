@@ -8,6 +8,7 @@
 |---|---|
 | [build_ap_pair_via_core_path_dataset.py](build_ap_pair_via_core_path_dataset.md) | 构造两个 AP 必须经过指定 CORE 的全部最短物理路径任务数据集。 |
 | [build_device_type_statistics_dataset.py](build_device_type_statistics_dataset.md) | 构造按物理设备类型统计设备名称的任务数据集。 |
+| [build_downstream_reachable_terminal_dataset.py](build_downstream_reachable_terminal_dataset.md) | 构造指定 CORE 或 Firewall 的唯一最近下游叶子节点查询任务数据集。 |
 | [build_link_failure_reroute_dataset.py](build_link_failure_reroute_dataset.md) | 从原始拓扑构造单链路故障绕行任务数据集。 |
 | [build_link_port_prediction_dataset.py](build_link_port_prediction_dataset.md) | 构造隐藏目标链路 LEFTPORT、RIGHTPORT 和 LABEL 的端口预测任务数据集。 |
 | [build_uplink_node_path_dataset.py](build_uplink_node_path_dataset.md) | 构造“上行节点路径查询”任务数据集。 |
