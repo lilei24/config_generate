@@ -8,6 +8,7 @@
 |---|---|
 | [generate_topology_visualizations.py](generate_topology_visualizations.md) | 为 `train`、`val`、`with_answer` 或 `without_answer` 中的拓扑 JSON 生成交互式 HTML。 |
 | [visualize_node_failure_reroute_dataset.py](visualize_node_failure_reroute_dataset.md) | 可视化节点故障绕行任务，区分故障节点、失效链路和标准绕行路径。 |
+| [visualize_node_failure_ap_impact_dataset.py](visualize_node_failure_ap_impact_dataset.md) | 可视化节点故障影响 AP 任务，区分故障节点、失效链路和答案中的失联 AP。 |
 
 ## 使用原则
 
