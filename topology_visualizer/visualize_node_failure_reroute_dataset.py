@@ -12,11 +12,10 @@ from pathlib import Path
 from typing import Any, Optional
 
 
-DEFAULT_DATASET_ROOT = Path("node_failure_reroute_dataset_from_raw")
+DEFAULT_DATASET_ROOT = Path("node_failure_reroute_dataset_from_raw/with_answer")
 DEFAULT_OUTPUT_ROOT = Path("/tmp/node_failure_reroute_visualizations")
 DEFAULT_SPLIT = "all"
 DEFAULT_PROGRESS_INTERVAL = 20
-DATA_DIRECTORY_CHOICES = ("train", "val", "with_answer", "without_answer")
 
 
 @dataclass(frozen=True)
@@ -27,7 +26,7 @@ class PageRecord:
     source_id: str
     target_id: str
     failed_node_id: str
-    path_length: Optional[int]
+    path_length: int
     path_count: int
     node_count: int
     edge_count: int
@@ -42,7 +41,7 @@ def parse_args() -> argparse.Namespace:
         nargs="?",
         type=Path,
         default=DEFAULT_DATASET_ROOT,
-        help="任务数据集根目录、子目录或单个 JSON，默认: %(default)s",
+        help="with_answer 根目录、split 目录或单个 JSON，默认: %(default)s",
     )
     parser.add_argument(
         "-o",
@@ -53,9 +52,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--split",
-        choices=(*DATA_DIRECTORY_CHOICES, "all"),
+        choices=("train", "val", "all"),
         default=DEFAULT_SPLIT,
-        help="选择 train、val、with_answer、without_answer 或全部，默认: %(default)s",
+        help="目录输入时处理的数据划分，默认: %(default)s",
     )
     parser.add_argument(
         "--max-files",
@@ -192,14 +191,11 @@ def parse_sample(path: Path, source_label: str) -> tuple[dict[str, Any], PageRec
     if source_id is None or target_id is None or failed_node_id is None:
         raise ValueError("缺少 task_source_node_id、task_target_node_id 或 task_failed_node_id")
     answer = document.get("task_answer")
-    has_answer = isinstance(answer, dict)
     answer_paths = normalize_paths(answer)
-    if has_answer and not answer_paths:
+    if not answer_paths:
         raise ValueError("task_answer.paths 不包含有效路径")
     answer_length = answer.get("path_length") if isinstance(answer, dict) else None
-    if has_answer and (
-        not isinstance(answer_length, int) or isinstance(answer_length, bool)
-    ):
+    if not isinstance(answer_length, int) or isinstance(answer_length, bool):
         raise ValueError("task_answer.path_length 不是整数")
 
     issues: Counter[str] = Counter()
@@ -316,7 +312,6 @@ def parse_sample(path: Path, source_label: str) -> tuple[dict[str, Any], PageRec
             "question": document.get("task_question"),
         },
         "answer": answer,
-        "hasAnswer": has_answer,
         "answerPaths": answer_paths,
         "metadata": metadata,
         "nodes": nodes,
@@ -324,8 +319,7 @@ def parse_sample(path: Path, source_label: str) -> tuple[dict[str, Any], PageRec
         "issues": dict(sorted(issues.items())),
         "canvas": {"width": width, "height": height},
     }
-    label_parts = Path(source_label).parts
-    split = next((part for part in label_parts if part in ("train", "val")), "single")
+    split = source_label.split("/", 1)[0] if "/" in source_label else "single"
     record = PageRecord(
         source_file=source_label,
         split=split,
@@ -333,7 +327,7 @@ def parse_sample(path: Path, source_label: str) -> tuple[dict[str, Any], PageRec
         source_id=source_id,
         target_id=target_id,
         failed_node_id=failed_node_id,
-        path_length=answer_length if isinstance(answer_length, int) else None,
+        path_length=answer_length,
         path_count=len(answer_paths),
         node_count=len(nodes),
         edge_count=len(edges),
@@ -375,7 +369,7 @@ const clip=(value,n=20)=>String(value).length<=n?String(value):String(value).sli
 const textWidth=(value,size=11)=>Math.ceil([...String(value)].reduce((sum,c)=>sum+(c.charCodeAt(0)>255?size:size*.62),0));
 const overlap=(a,b,p=5)=>!(a.x+a.w+p<b.x||b.x+b.w+p<a.x||a.y+a.h+p<b.y||b.y+b.h+p<a.y);
 const linePoint=(a,b,d)=>{{const dx=b.x-a.x,dy=b.y-a.y,len=Math.max(1,Math.hypot(dx,dy));return {{x:a.x+dx*d/len,y:a.y+dy*d/len}};}};
-document.getElementById("stats").innerHTML=`<span class="pill">${{esc(data.task.source)}} → ${{esc(data.task.target)}}</span><span class="pill">故障 ${{esc(data.task.failedNode)}}</span><span class="pill optional">${{data.hasAnswer?`${{data.answer.path_length}} 跳 · ${{data.answerPaths.length}} 条最短路径`:'无标准答案'}}</span>`;
+document.getElementById("stats").innerHTML=`<span class="pill">${{esc(data.task.source)}} → ${{esc(data.task.target)}}</span><span class="pill">故障 ${{esc(data.task.failedNode)}}</span><span class="pill optional">${{data.answer.path_length}} 跳 · ${{data.answerPaths.length}} 条最短路径</span>`;
 function isPathEdge(edge){{return edge.inAnswer&&(!selectedPath||edge.answerPathIndexes.includes(selectedPath));}}
 function edgeVisible(edge){{return !taskOnly||edge.isRemoved||isPathEdge(edge);}}
 function labelPosition(node,text,occupied){{const w=textWidth(text)+12,h=20,candidates=[[0,34],[0,-36],[34,0],[-34,0],[34,28],[-34,28],[34,-28],[-34,-28]];for(const [dx,dy] of candidates){{const box={{x:node.x+dx-w/2,y:node.y+dy-h/2,w,h,dx,dy}};if(!occupied.some(other=>overlap(box,other))){{occupied.push(box);return box;}}}}const [dx,dy]=[0,44];const box={{x:node.x+dx-w/2,y:node.y+dy-h/2,w,h,dx,dy}};occupied.push(box);return box;}}
@@ -389,9 +383,9 @@ function render(){{
  }});applyScale();
 }}
 function applyScale(){{svg.style.transform=`scale(${{scale}})`;svg.style.marginRight=`${{data.canvas.width*(scale-1)}}px`;svg.style.marginBottom=`${{data.canvas.height*(scale-1)}}px`;}}
-function pathHtml(){{return data.answerPaths.map((path,index)=>`<div class="path ${{selectedPath===index+1?'active':''}}" data-path="${{index+1}}">#${{index+1}} · ${{path.length-1}} 跳<br>${{esc(path.join(' → '))}}</div>`).join('')||'<p style="font-size:12px;color:var(--muted)">当前样本不包含标准答案。</p>';}}
+function pathHtml(){{return data.answerPaths.map((path,index)=>`<div class="path ${{selectedPath===index+1?'active':''}}" data-path="${{index+1}}">#${{index+1}} · ${{path.length-1}} 跳<br>${{esc(path.join(' → '))}}</div>`).join('');}}
 function bindPaths(){{sidebar.querySelectorAll("[data-path]").forEach(item=>item.addEventListener("click",()=>{{const value=Number(item.dataset.path);selectedPath=selectedPath===value?0:value;render();showSummary(false);}}));}}
-function showSummary(reset=true){{if(reset){{selected=null;selectedPath=0;}}render();const issues=Object.entries(data.issues).map(([k,v])=>`<b>${{esc(k)}}</b><span class="warning">${{v}}</span>`).join('');sidebar.innerHTML=`<section class="panel"><h2>任务概览</h2><div class="kv"><b>源节点</b><span>${{esc(data.task.source)}}</span><b>目标节点</b><span>${{esc(data.task.target)}}</span><b>故障节点</b><span>${{esc(data.task.failedNode)}}</span><b>最短跳数</b><span>${{data.hasAnswer?data.answer.path_length:'无答案'}}</span><b>答案路径数</b><span>${{data.answerPaths.length}}</span><b>失效链路数</b><span>${{data.edges.filter(e=>e.isRemoved).length}}</span><b>目标角色</b><span>${{esc(data.metadata.target_role||'<missing>')}}</span></div><details><summary>任务问题</summary><pre>${{esc(data.task.question||'')}}</pre></details></section><section class="panel"><h2>标准绕行路径</h2>${{data.hasAnswer?'<p style="font-size:11px;color:var(--muted);margin:0 0 7px">点击路径可单独高亮；再次点击恢复全部。</p>':''}}${{pathHtml()}}</section><section class="panel"><h2>图例</h2><div class="legend"><span><i style="border-color:var(--green)"></i>答案路径</span><span><i style="border-color:var(--red);border-style:dashed"></i>故障移除边</span><span><i style="border-color:#a6b0b8"></i>其他物理链路</span><span>红色节点：故障设备</span><span>蓝色节点：源节点</span><span>紫色节点：目标节点</span></div></section><section class="panel"><h2>数据校验</h2><div class="kv">${{issues||'<span>未发现结构或答案问题</span>'}}</div></section>`;bindPaths();}}
+function showSummary(reset=true){{if(reset){{selected=null;selectedPath=0;}}render();const issues=Object.entries(data.issues).map(([k,v])=>`<b>${{esc(k)}}</b><span class="warning">${{v}}</span>`).join('');sidebar.innerHTML=`<section class="panel"><h2>任务概览</h2><div class="kv"><b>源节点</b><span>${{esc(data.task.source)}}</span><b>目标节点</b><span>${{esc(data.task.target)}}</span><b>故障节点</b><span>${{esc(data.task.failedNode)}}</span><b>最短跳数</b><span>${{data.answer.path_length}}</span><b>答案路径数</b><span>${{data.answerPaths.length}}</span><b>失效链路数</b><span>${{data.edges.filter(e=>e.isRemoved).length}}</span><b>目标角色</b><span>${{esc(data.metadata.target_role||'<missing>')}}</span></div><details><summary>任务问题</summary><pre>${{esc(data.task.question||'')}}</pre></details></section><section class="panel"><h2>标准绕行路径</h2><p style="font-size:11px;color:var(--muted);margin:0 0 7px">点击路径可单独高亮；再次点击恢复全部。</p>${{pathHtml()}}</section><section class="panel"><h2>图例</h2><div class="legend"><span><i style="border-color:var(--green)"></i>答案路径</span><span><i style="border-color:var(--red);border-style:dashed"></i>故障移除边</span><span><i style="border-color:#a6b0b8"></i>其他物理链路</span><span>红色节点：故障设备</span><span>蓝色节点：源节点</span><span>紫色节点：目标节点</span></div></section><section class="panel"><h2>数据校验</h2><div class="kv">${{issues||'<span>未发现结构或答案问题</span>'}}</div></section>`;bindPaths();}}
 function showNode(node){{selected=`n${{node.id}}`;render();sidebar.innerHTML=`<section class="panel"><h2>节点详情</h2><div class="kv"><b>ID</b><span>${{esc(node.id)}}</span><b>设备名称</b><span>${{esc(node.name)}}</span><b>TYPE</b><span>${{esc(node.type)}}</span><b>ROLE</b><span>${{esc(node.role)}}</span><b>MODEL</b><span>${{esc(node.model)}}</span><b>原图度数</b><span>${{node.degree}}</span><b>任务身份</b><span>${{node.isFailed?'故障节点':node.isSource?'源节点':node.isTarget?'目标节点':node.inAnswer?'答案路径节点':'普通节点'}}</span></div></section><section class="panel"><button onclick="showSummary()">返回任务概览</button></section>`;}}
 function showEdge(edge){{selected=`e${{edge.index}}`;render();sidebar.innerHTML=`<section class="panel"><h2>链路详情</h2><div class="kv"><b>source</b><span>${{esc(edge.source)}}</span><b>LEFTPORT</b><span>${{esc(edge.leftPort)}}</span><b>target</b><span>${{esc(edge.target)}}</span><b>RIGHTPORT</b><span>${{esc(edge.rightPort)}}</span><b>LABEL</b><span>${{esc(edge.label)}}</span><b>故障后状态</b><span>${{edge.isRemoved?'随故障节点移除':'保留'}}</span><b>路径归属</b><span>${{edge.inAnswer?'标准答案路径 #'+edge.answerPathIndexes.join(', #'):'非答案链路'}}</span></div></section><section class="panel"><button onclick="showSummary()">返回任务概览</button></section>`;}}
 document.getElementById("showAll").addEventListener("click",()=>{{taskOnly=false;document.getElementById("showAll").classList.add("active");document.getElementById("showTask").classList.remove("active");render();}});document.getElementById("showTask").addEventListener("click",()=>{{taskOnly=true;document.getElementById("showTask").classList.add("active");document.getElementById("showAll").classList.remove("active");render();}});document.getElementById("labels").addEventListener("change",e=>{{allLabels=e.target.checked;render();}});
@@ -410,7 +404,7 @@ def index_html(records: list[PageRecord]) -> str:
             f'data-split="{html.escape(record.split)}"><td><a href="{html.escape(record.output_file)}">'
             f"{html.escape(record.source_file)}</a></td><td>{html.escape(record.split)}</td>"
             f"<td>{html.escape(record.source_id)}</td><td>{html.escape(record.target_id)}</td>"
-            f"<td>{html.escape(record.failed_node_id)}</td><td>{record.path_length if record.path_length is not None else '无答案'}</td>"
+            f"<td>{html.escape(record.failed_node_id)}</td><td>{record.path_length}</td>"
             f"<td>{record.path_count}</td><td>{record.removed_edge_count}</td><td>{status}</td></tr>"
         )
     return f'''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>节点故障绕行数据集可视化</title><style>
@@ -425,24 +419,23 @@ def collect_files(root: Path, split: str) -> list[tuple[Path, str]]:
         return [(root, root.name)]
     if not root.is_dir():
         raise FileNotFoundError(f"输入不存在: {root}")
-    if split == "all" or root.name == split:
-        search_roots = [root]
+    selected = ("train", "val") if split == "all" else (split,)
+    has_split_dirs = any((root / name).is_dir() for name in ("train", "val"))
+    files: list[tuple[Path, str]] = []
+    if has_split_dirs:
+        for name in selected:
+            split_root = root / name
+            if split_root.is_dir():
+                files.extend(
+                    (path, path.relative_to(root).as_posix())
+                    for path in sorted(split_root.rglob("*.json"))
+                )
     else:
-        search_roots = []
-        direct = root / split
-        if direct.is_dir():
-            search_roots.append(direct)
-        if split in ("train", "val"):
-            for version in ("with_answer", "without_answer"):
-                candidate = root / version / split
-                if candidate.is_dir():
-                    search_roots.append(candidate)
-
-    files_by_path: dict[Path, tuple[Path, str]] = {}
-    for search_root in search_roots:
-        for path in sorted(search_root.rglob("*.json")):
-            files_by_path[path] = (path, path.relative_to(root).as_posix())
-    return [files_by_path[path] for path in sorted(files_by_path)]
+        files.extend(
+            (path, path.relative_to(root).as_posix())
+            for path in sorted(root.rglob("*.json"))
+        )
+    return files
 
 
 def main() -> None:

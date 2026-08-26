@@ -4,7 +4,7 @@
 
 ## 功能与业务价值
 
-将 `node_failure_reroute_dataset_from_raw` 中的节点故障绕行任务转换为可交互静态 HTML，用于直观核查故障注入、链路失效和标准绕行答案是否一致。脚本同时支持 `with_answer` 和 `without_answer`；后者只展示任务故障影响，并明确提示没有标准答案。
+将 `node_failure_reroute_dataset_from_raw/with_answer` 中的节点故障绕行任务转换为可交互静态 HTML，用于直观核查故障注入、链路失效和标准绕行答案是否一致。
 
 页面以原始完整拓扑作为底图，并明确区分：
 
@@ -31,15 +31,15 @@
 
 | 参数 | 说明 |
 |---|---|
-| `dataset_root` | 任务数据集根目录、某个子目录或单个任务 JSON。默认：`node_failure_reroute_dataset_from_raw`。 |
+| `dataset_root` | `with_answer` 根目录、某个 split 目录或单个任务 JSON。默认：`node_failure_reroute_dataset_from_raw/with_answer`。 |
 | `-o, --output-root` | HTML 和汇总文件输出目录。默认：`/tmp/node_failure_reroute_visualizations`。 |
-| `--split {train,val,with_answer,without_answer,all}` | `train/val` 按数据划分筛选；`with_answer/without_answer` 按答案版本筛选；`all` 处理根目录下的全部 JSON。默认：`all`。 |
+| `--split {train,val,all}` | 根目录包含 `train/val` 时选择处理范围。默认：`all`。 |
 | `--max-files` | 按文件名字典序最多处理多少个 JSON，默认不限制。 |
 | `--progress-interval` | 每处理多少个文件输出一次进度，`0` 表示关闭。默认：`20`。 |
 
 ## 输入输出
 
-输入必须保留任务构造阶段的完整拓扑，并包含 `task_source_node_id`、`task_target_node_id` 和 `task_failed_node_id`。`with_answer` 样本还应包含 `task_answer.paths`；`without_answer` 不要求该字段。脚本只读取数据，不修改原始 JSON。
+输入必须保留任务构造阶段的完整拓扑，并包含 `task_source_node_id`、`task_target_node_id`、`task_failed_node_id` 和 `task_answer.paths`。脚本只读取数据，不修改原始 JSON。
 
 输出目录保持输入的相对路径结构。`index.html` 用于选择样本，逐样本页面用于拓扑检查，`visualization_summary.json` 记录扫描文件数、生成页面数、校验异常和错误文件。
 
