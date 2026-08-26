@@ -1,10 +1,10 @@
-# build_nearest_core_dataset.py
+# build_uplink_node_path_dataset.py
 
-> 代码位置：[`scripts/build_task_dataset/build_nearest_core_dataset.py`](../../../scripts/build_task_dataset/build_nearest_core_dataset.py)
+> 代码位置：[`scripts/build_task_dataset/build_uplink_node_path_dataset.py`](../../../scripts/build_task_dataset/build_uplink_node_path_dataset.py)
 
 ## 功能与业务价值
 
-构造“从 AP 查找最近上层目标设备”任务数据集。
+构造“上行节点路径查询”任务数据集：从 AP 出发，按角色优先级查询最近的可达上行节点及全部最短路径。
 
 输入数据集目录结构默认是：
 
@@ -43,7 +43,7 @@ without_answer 删除标准答案。每个输出 JSON 完整保留原始拓扑�
 |---|---|
 | `-h, --help` | 显示当前脚本的完整命令帮助后退出。 |
 | `--dataset-root DATASET_ROOT` | 原始数据集根目录，默认: datasets |
-| `--output-root OUTPUT_ROOT` | 输出任务数据集根目录，默认: nearest_core_dataset |
+| `--output-root OUTPUT_ROOT` | 输出任务数据集根目录，默认: uplink_node_path_dataset |
 | `--splits SPLITS [SPLITS ...]` | 需要处理的数据划分，默认: train val |
 | `--seed SEED` | 随机种子，默认: 20260715 |
 | `--progress-interval PROGRESS_INTERVAL` | 每处理多少个文件打印一次进度，默认: 100 |
@@ -56,7 +56,7 @@ without_answer 删除标准答案。每个输出 JSON 完整保留原始拓扑�
 | 常量 | 当前值 |
 |---|---|
 | `DEFAULT_DATASET_ROOT` | `'datasets'` |
-| `DEFAULT_OUTPUT_ROOT` | `'nearest_core_dataset'` |
+| `DEFAULT_OUTPUT_ROOT` | `'uplink_node_path_dataset'` |
 | `DEFAULT_RANDOM_SEED` | `20260715` |
 | `DEFAULT_SPLITS` | `('train', 'val')` |
 | `DEFAULT_PROGRESS_INTERVAL` | `100` |
@@ -65,7 +65,7 @@ without_answer 删除标准答案。每个输出 JSON 完整保留原始拓扑�
 ## 运行方式
 
 ```bash
-python scripts/build_task_dataset/build_nearest_core_dataset.py --help
+python scripts/build_task_dataset/build_uplink_node_path_dataset.py --help
 ```
 
 确认数据路径和输出路径后，可去掉 `--help` 并传入上表参数执行。

@@ -447,10 +447,10 @@ target 节点 ID：{target_id}
 
 
 NEAREST_CORE_SPEC = TaskInferenceSpec(
-    task_name="nearest_reachable_role_path",
-    default_dataset_root=Path("nearest_core_dataset"),
-    default_vllm_output_root=Path("vllm-results/nearest_core"),
-    default_opencode_output_root=Path("opencode-results/nearest_core"),
+    task_name="uplink_node_path_query",
+    default_dataset_root=Path("uplink_node_path_dataset"),
+    default_vllm_output_root=Path("vllm-results/uplink_node_path"),
+    default_opencode_output_root=Path("opencode-results/uplink_node_path"),
     default_model="qwen3-8b",
     system_prompt=SYSTEM_PROMPT,
     build_vllm_prompt=build_nearest_vllm_prompt,

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""构造“从 AP 查找最近上层目标设备”任务数据集。
+"""构造“上行节点路径查询”任务数据集。
 
 输入数据集目录结构默认是：
 
@@ -38,7 +38,7 @@ from typing import Any
 
 
 DEFAULT_DATASET_ROOT = Path("datasets")
-DEFAULT_OUTPUT_ROOT = Path("nearest_core_dataset")
+DEFAULT_OUTPUT_ROOT = Path("uplink_node_path_dataset")
 DEFAULT_RANDOM_SEED = 20260715
 DEFAULT_SPLITS = ("train", "val")
 DEFAULT_PROGRESS_INTERVAL = 100
@@ -386,7 +386,7 @@ def process_file(
         path_length=path_length,
     )
     task_graph["task_metadata"] = {
-        "task_name": "find_nearest_reachable_role_tier_nodes",
+        "task_name": "uplink_node_path_query",
         "split": split,
         "source_file": input_path.name,
         "target_priority_rank": target_priority_rank,

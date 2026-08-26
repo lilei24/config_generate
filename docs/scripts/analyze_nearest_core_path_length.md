@@ -4,9 +4,9 @@
 
 ## 功能与业务价值
 
-统计“AP 到最近 CORE”任务数据集中的最短路径长度。
+统计“上行节点路径查询”任务数据集中的最短路径长度。
 
-默认读取 ``nearest_core_dataset/with_answer/{train,val}``，直接使用已经构造好的
+默认读取 ``uplink_node_path_dataset/with_answer/{train,val}``，直接使用已经构造好的
 ``task_answer.path_length``，避免重新随机选择 AP 后与实际任务样本不一致。
 
 输出格式与 analyze_graph_max_finite_shortest_path.py 一致：只生成一个格式化 JSON，
@@ -25,9 +25,9 @@
 
 | 参数 | 说明 |
 |---|---|
-| `input_root` | 最近 CORE 有答案数据集根目录，内含 train/ 和 val/。默认：nearest_core_dataset/with_answer |
+| `input_root` | 上行节点路径查询有答案数据集根目录，内含 train/ 和 val/。默认：uplink_node_path_dataset/with_answer |
 | `-h, --help` | 显示当前脚本的完整命令帮助后退出。 |
-| `-o OUTPUT_DIR, --output-dir OUTPUT_DIR` | 统计结果输出目录。默认：/tmp/nearest_core_path_length_analysis |
+| `-o OUTPUT_DIR, --output-dir OUTPUT_DIR` | 统计结果输出目录。默认：/tmp/uplink_node_path_length_analysis |
 | `--split {train,val,all}` | 统计范围：train、val 或 all。默认：all |
 | `--progress-interval PROGRESS_INTERVAL` | 每 N 个样本打印一次进度。0 表示不打印。默认：50 |
 
@@ -37,8 +37,8 @@
 
 | 常量 | 当前值 |
 |---|---|
-| `DEFAULT_INPUT_ROOT` | `'nearest_core_dataset/with_answer'` |
-| `DEFAULT_OUTPUT_DIR` | `'/tmp/nearest_core_path_length_analysis'` |
+| `DEFAULT_INPUT_ROOT` | `'uplink_node_path_dataset/with_answer'` |
+| `DEFAULT_OUTPUT_DIR` | `'/tmp/uplink_node_path_length_analysis'` |
 | `DEFAULT_PROGRESS_INTERVAL` | `50` |
 
 ## 运行方式

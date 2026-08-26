@@ -10,7 +10,7 @@
 | [build_device_type_statistics_dataset.py](build_device_type_statistics_dataset.md) | 构造按物理设备类型统计设备名称的任务数据集。 |
 | [build_link_failure_reroute_dataset.py](build_link_failure_reroute_dataset.md) | 从原始拓扑构造单链路故障绕行任务数据集。 |
 | [build_link_port_prediction_dataset.py](build_link_port_prediction_dataset.md) | 构造隐藏目标链路 LEFTPORT、RIGHTPORT 和 LABEL 的端口预测任务数据集。 |
-| [build_nearest_core_dataset.py](build_nearest_core_dataset.md) | 构造“从 AP 查找最近上层目标设备”任务数据集。 |
+| [build_uplink_node_path_dataset.py](build_uplink_node_path_dataset.md) | 构造“上行节点路径查询”任务数据集。 |
 | [build_node_failure_ap_impact_dataset.py](build_node_failure_ap_impact_dataset.md) | 构造“指定非 AP 节点故障后哪些 AP 失联”的正向影响面任务数据集。 |
 | [build_node_failure_reroute_dataset_from_raw.py](build_node_failure_reroute_dataset_from_raw.md) | 直接从原始拓扑构造单节点故障绕行任务数据集。 |
 | [build_reachable_leaf_nodes_dataset.py](build_reachable_leaf_nodes_dataset.md) | 构造从单个目标节点出发查找全部可达叶子节点的任务数据集。 |

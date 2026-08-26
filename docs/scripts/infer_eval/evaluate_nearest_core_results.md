@@ -4,7 +4,7 @@
 
 ## 功能与业务价值
 
-评估 AP 到最近目标角色设备的全部最短路径推理结果。
+评估“上行节点路径查询”的全部最短路径推理结果。
 
 **业务价值：** 统一执行 vLLM/OpenCode 推理、错误记录、指标计算和 SwanLab 观测。
 
@@ -29,13 +29,13 @@
 
 | 参数 | 说明 |
 |---|---|
-| `result_path` | 单个同时包含 task_answer 和 model-output 的结果 JSON，或包含 train/val 的结果目录，默认: vllm-results/nearest_core |
+| `result_path` | 单个同时包含 task_answer 和 model-output 的结果 JSON，或包含 train/val 的结果目录，默认: vllm-results/uplink_node_path |
 | `-h, --help` | 显示当前脚本的完整命令帮助后退出。 |
-| `--output-dir OUTPUT_DIR` | 本地评估输出目录，默认: vllm-results/nearest_core-evaluation |
+| `--output-dir OUTPUT_DIR` | 本地评估输出目录，默认: vllm-results/uplink_node_path-evaluation |
 | `--split {train,val,all}` | 评估的数据划分，默认: val |
 | `--progress-interval PROGRESS_INTERVAL` | 每处理 N 个文件打印进度，0 表示关闭，默认: 100 |
-| `--swanlab-project SWANLAB_PROJECT` | SwanLab 项目名称，默认: topology-nearest-core |
-| `--swanlab-experiment SWANLAB_EXPERIMENT` | SwanLab 实验名称，默认: nearest-core-evaluation |
+| `--swanlab-project SWANLAB_PROJECT` | SwanLab 项目名称，默认: topology-uplink-node-path |
+| `--swanlab-experiment SWANLAB_EXPERIMENT` | SwanLab 实验名称，默认: uplink-node-path-evaluation |
 | `--swanlab-mode SWANLAB_MODE` | SwanLab 运行模式，默认: cloud |
 | `--swanlab-color-seed SWANLAB_COLOR_SEED` | 根据实验名生成确定性颜色的固定随机种子，默认: 20260727 |
 | `--swanlab-color-key SWANLAB_COLOR_KEY` | 实验颜色区分键；默认使用 result_path，不同模型可显式传入不同键 |
@@ -47,8 +47,8 @@
 
 | 常量 | 当前值 |
 |---|---|
-| `DEFAULT_RESULT_PATH` | `'vllm-results/nearest_core'` |
-| `DEFAULT_OUTPUT_DIR` | `'vllm-results/nearest_core-evaluation'` |
+| `DEFAULT_RESULT_PATH` | `'vllm-results/uplink_node_path'` |
+| `DEFAULT_OUTPUT_DIR` | `'vllm-results/uplink_node_path-evaluation'` |
 
 ## 运行方式
 

@@ -19,9 +19,9 @@
 | 参数 | 说明 |
 |---|---|
 | `-h, --help` | 显示当前脚本的完整命令帮助后退出。 |
-| `--hidden-root HIDDEN_ROOT` | without_answer 数据集根目录，默认: nearest_core_dataset/without_answer |
-| `--answer-root ANSWER_ROOT` | with_answer 数据集根目录，默认: nearest_core_dataset/with_answer |
-| `--output-root OUTPUT_ROOT` | 推理结果根目录，默认: opencode-results/nearest_core |
+| `--hidden-root HIDDEN_ROOT` | without_answer 数据集根目录，默认: uplink_node_path_dataset/without_answer |
+| `--answer-root ANSWER_ROOT` | with_answer 数据集根目录，默认: uplink_node_path_dataset/with_answer |
+| `--output-root OUTPUT_ROOT` | 推理结果根目录，默认: opencode-results/uplink_node_path |
 | `--split {train,val,all}` | 处理的数据划分，默认: val |
 | `--progress-interval PROGRESS_INTERVAL` | 每处理 N 个文件打印进度，0 表示关闭，默认: 1 |
 | `--limit LIMIT` | 只处理扫描顺序中的前 N 个 JSON |

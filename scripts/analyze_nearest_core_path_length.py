@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""统计“AP 到最近 CORE”任务数据集中的最短路径长度。
+"""统计“上行节点路径查询”任务数据集中的最短路径长度。
 
-默认读取 ``nearest_core_dataset/with_answer/{train,val}``，直接使用已经构造好的
+默认读取 ``uplink_node_path_dataset/with_answer/{train,val}``，直接使用已经构造好的
 ``task_answer.path_length``，避免重新随机选择 AP 后与实际任务样本不一致。
 
 输出格式与 analyze_graph_max_finite_shortest_path.py 一致：只生成一个格式化 JSON，
@@ -21,10 +21,10 @@ from statistics import mean
 from typing import Any, Dict, Iterable, List, Tuple
 
 
-DEFAULT_INPUT_ROOT = Path("nearest_core_dataset/with_answer")
-DEFAULT_OUTPUT_DIR = Path("/tmp/nearest_core_path_length_analysis")
+DEFAULT_INPUT_ROOT = Path("uplink_node_path_dataset/with_answer")
+DEFAULT_OUTPUT_DIR = Path("/tmp/uplink_node_path_length_analysis")
 DEFAULT_PROGRESS_INTERVAL = 50
-OUTPUT_FILE_NAME = "nearest_core_path_length_statistics.json"
+OUTPUT_FILE_NAME = "uplink_node_path_length_statistics.json"
 
 
 @dataclass
@@ -258,9 +258,9 @@ def print_terminal_summary(results: List[NearestCorePathLengthResult]) -> None:
     counts = Counter(values)
 
     print(f"\n{'=' * 60}")
-    print(f"统计完成：{len(valid_results)} 个最近 CORE 任务样本")
+    print(f"统计完成：{len(valid_results)} 个上行节点路径查询任务样本")
     print(f"{'=' * 60}")
-    print("\n--- AP 到最近 CORE 最短路径长度汇总 ---")
+    print("\n--- 上行节点路径最短长度汇总 ---")
     print(f"  count: {summary['count']}")
     print(f"  min:   {summary['min']}")
     print(f"  max:   {summary['max']}")
@@ -359,7 +359,7 @@ def build_statistics(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="统计 AP 到最近 CORE 任务样本的最短路径长度。"
+        description="统计上行节点路径查询任务样本的最短路径长度。"
     )
     parser.add_argument(
         "input_root",
@@ -367,7 +367,7 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=DEFAULT_INPUT_ROOT,
         help=(
-            "最近 CORE 有答案数据集根目录，内含 train/ 和 val/。"
+            "上行节点路径查询有答案数据集根目录，内含 train/ 和 val/。"
             f"默认：{DEFAULT_INPUT_ROOT}"
         ),
     )

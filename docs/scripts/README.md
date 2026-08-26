@@ -15,7 +15,7 @@
 | [analyze_graphs_without_ap_role.py](analyze_graphs_without_ap_role.md) | 统计原始拓扑数据中不包含 DEVICEROLE=AP 节点的 JSON 文件。 |
 | [analyze_large_graph_edge_counts.py](analyze_large_graph_edge_counts.md) | 筛选节点数超过指定阈值的图，将节点数和 links 数量写入一个 CSV。 |
 | [analyze_leaf_node_role_distribution.py](analyze_leaf_node_role_distribution.md) | 统计原始拓扑数据中叶子节点的 DEVICEROLE 分布。 |
-| [analyze_nearest_core_path_length.py](analyze_nearest_core_path_length.md) | 统计“AP 到最近 CORE”任务数据集中的最短路径长度。 |
+| [analyze_nearest_core_path_length.py](analyze_nearest_core_path_length.md) | 统计“上行节点路径查询”任务数据集中的最短路径长度。 |
 | [analyze_node_counts.py](analyze_node_counts.md) | Analyze only node counts for train/val graph JSON files. |
 | [analyze_node_name_uniqueness.py](analyze_node_name_uniqueness.md) | 分析原始拓扑数据中 devices.NAME 能否唯一标识节点。 |
 | [analyze_qa_tokens.py](analyze_qa_tokens.md) | 统计 QA 样本 input 的 token 分布，并生成柱状图。 |
