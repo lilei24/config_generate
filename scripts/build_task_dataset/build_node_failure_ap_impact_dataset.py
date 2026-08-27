@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""构造“指定非 AP 节点故障后哪些 AP 失联”的正向影响面任务数据集。"""
+"""构造节点故障后哪些 AP 到指定上游目标的路径受到影响的数据集。"""
 
 from __future__ import annotations
 
@@ -39,24 +39,36 @@ TARGET_ROLE_PRIORITY: tuple[tuple[str, str], ...] = (
 
 IMPACT_LEVEL_ORDER = ("small", "medium", "large")
 
-QUESTION_TEMPLATE = """正常情况下，每个 AP 都以自己能够到达的最高优先级设备作为上游目标。
+QUESTION_TEMPLATE = """节点 ID {failed_node_id} 发生故障，指定上游目标节点为节点 ID {target_node_id}。
 
-优先级从高到低为：
-CORE > Gateway+CORE > Gateway_vRR > Gateway > Firewall > AGG > ACC
+请找出所有受到影响的 AP 节点。如果某个 AP 到指定上游目标节点的最短路径比故障前更长，或者故障后无法到达该目标节点，则认为该 AP 受到影响。
 
-同一优先级存在多个可达节点时，这些节点都属于该 AP 的上游目标。
-
-例如：
-- AP 能到达 CORE1、CORE2、Gateway1 和 AGG1 时，最高优先级是 CORE，因此 CORE1 和 CORE2 都是该 AP 的正常上游目标；
-- AP 无法到达任何 CORE，但能到达 Gateway1 和 AGG1 时，Gateway1 是该 AP 的正常上游目标；
-- 故障后只要还能到达任意一个正常上游目标，该 AP 就不算失联。
-
-现在节点 {failed_node_id} 发生故障。如果某个 AP 无法再到达任何一个正常上游目标，则认为该 AP 失联。即使它还能到达更低优先级的设备，也仍然视为失联。
-
-请返回所有失联 AP 的节点 ID，只输出 JSON：
-
+请严格按照以下 JSON Schema 输出：
 {{
-  "disconnected_ap_ids": ["AP节点ID"]
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "impacted_ap_ids"
+  ],
+  "properties": {{
+    "impacted_ap_ids": {{
+      "type": "array",
+      "description": "所有受影响 AP 的节点 ID",
+      "items": {{
+        "type": "string"
+      }}
+    }}
+  }}
+}}
+
+只输出 JSON，不要输出解释、Markdown 或代码块。
+
+输出示例如下：
+{{
+  "impacted_ap_ids": [
+    "AP_NODE_1",
+    "AP_NODE_2"
+  ]
 }}"""
 
 
@@ -78,8 +90,9 @@ class BaselineTarget:
 
 @dataclass(frozen=True)
 class ImpactCandidate:
+    target_node_id: str
     failed_node_id: str
-    disconnected_ap_ids: tuple[str, ...]
+    impacted_ap_ids: tuple[str, ...]
     impact_level: str
 
 
@@ -237,6 +250,36 @@ def reachable_nodes(
     return visited
 
 
+def shortest_distance(
+    adjacency: dict[str, set[str]],
+    source: str,
+    target: str,
+    blocked_node_id: str | None = None,
+) -> int | None:
+    """计算避开指定故障节点时的最短跳数，不可达时返回 None。"""
+
+    if source == blocked_node_id or target == blocked_node_id:
+        return None
+    if source not in adjacency or target not in adjacency:
+        return None
+    if source == target:
+        return 0
+
+    distances = {source: 0}
+    queue: deque[str] = deque([source])
+    while queue:
+        current = queue.popleft()
+        next_distance = distances[current] + 1
+        for neighbor in adjacency.get(current, set()):
+            if neighbor == blocked_node_id or neighbor in distances:
+                continue
+            if neighbor == target:
+                return next_distance
+            distances[neighbor] = next_distance
+            queue.append(neighbor)
+    return None
+
+
 def connected_components(
     adjacency: dict[str, set[str]],
     blocked_node_id: str | None = None,
@@ -312,35 +355,56 @@ def build_ap_baselines(
     return baselines
 
 
-def disconnected_aps_after_failure(
-    graph: dict[str, Any],
+def choose_target_node(
+    baselines: dict[str, BaselineTarget],
+    rng: random.Random,
+) -> str | None:
+    """从各 AP 按原优先级选出的正常上游目标中固定选择一个节点。"""
+
+    target_node_ids = sorted(
+        {
+            target_node_id
+            for baseline in baselines.values()
+            for target_node_id in baseline.target_node_ids
+        }
+    )
+    return rng.choice(target_node_ids) if target_node_ids else None
+
+
+def build_baseline_distances(
     adjacency: dict[str, set[str]],
     baselines: dict[str, BaselineTarget],
+    target_node_id: str,
+) -> dict[str, int]:
+    """记录以指定节点为正常上游目标的 AP 在故障前的最短距离。"""
+
+    distances: dict[str, int] = {}
+    for ap_id, baseline in sorted(baselines.items()):
+        if target_node_id not in baseline.target_node_ids:
+            continue
+        distance = shortest_distance(adjacency, ap_id, target_node_id)
+        if distance is not None:
+            distances[ap_id] = distance
+    return distances
+
+
+def impacted_aps_after_failure(
+    adjacency: dict[str, set[str]],
+    baseline_distances: dict[str, int],
+    target_node_id: str,
     failed_node_id: str,
 ) -> tuple[str, ...]:
-    disconnected: list[str] = []
-    directed = bool(graph.get("directed", False))
-    component_by_node = None if directed else connected_components(adjacency, failed_node_id)
-
-    for ap_id, baseline in sorted(baselines.items()):
-        surviving_targets = baseline.target_node_ids - {failed_node_id}
-        if not surviving_targets:
-            disconnected.append(ap_id)
-            continue
-
-        if directed:
-            reachable = reachable_nodes(adjacency, ap_id, failed_node_id)
-            still_reachable = bool(surviving_targets & reachable)
-        else:
-            assert component_by_node is not None
-            ap_component = component_by_node.get(ap_id)
-            still_reachable = ap_component is not None and any(
-                component_by_node.get(target_id) == ap_component
-                for target_id in surviving_targets
-            )
-        if not still_reachable:
-            disconnected.append(ap_id)
-    return tuple(disconnected)
+    impacted: list[str] = []
+    for ap_id, baseline_distance in sorted(baseline_distances.items()):
+        failure_distance = shortest_distance(
+            adjacency,
+            ap_id,
+            target_node_id,
+            blocked_node_id=failed_node_id,
+        )
+        if failure_distance is None or failure_distance > baseline_distance:
+            impacted.append(ap_id)
+    return tuple(impacted)
 
 
 def classify_impact(affected_ap_count: int) -> str:
@@ -354,28 +418,32 @@ def classify_impact(affected_ap_count: int) -> str:
 
 
 def collect_candidates(
-    graph: dict[str, Any],
     node_info: NodeInformation,
     adjacency: dict[str, set[str]],
-    baselines: dict[str, BaselineTarget],
+    target_node_id: str,
+    baseline_distances: dict[str, int],
 ) -> list[ImpactCandidate]:
     candidates: list[ImpactCandidate] = []
     for failed_node_id in node_info.node_ids:
-        if node_info.role_by_id.get(failed_node_id) == "AP":
+        if (
+            node_info.role_by_id.get(failed_node_id) == "AP"
+            or failed_node_id == target_node_id
+        ):
             continue
-        disconnected_ap_ids = disconnected_aps_after_failure(
-            graph,
+        impacted_ap_ids = impacted_aps_after_failure(
             adjacency,
-            baselines,
+            baseline_distances,
+            target_node_id,
             failed_node_id,
         )
-        if not disconnected_ap_ids:
+        if not impacted_ap_ids:
             continue
         candidates.append(
             ImpactCandidate(
+                target_node_id=target_node_id,
                 failed_node_id=failed_node_id,
-                disconnected_ap_ids=disconnected_ap_ids,
-                impact_level=classify_impact(len(disconnected_ap_ids)),
+                impacted_ap_ids=impacted_ap_ids,
+                impact_level=classify_impact(len(impacted_ap_ids)),
             )
         )
     return candidates
@@ -415,14 +483,16 @@ def build_task_graph(
             task_graph.pop(key)
 
     task_graph["task_failed_node_id"] = candidate.failed_node_id
+    task_graph["task_target_node_id"] = candidate.target_node_id
     task_graph["task_target_role_priority"] = [
         role for _, role in TARGET_ROLE_PRIORITY
     ]
     task_graph["task_question"] = QUESTION_TEMPLATE.format(
-        failed_node_id=candidate.failed_node_id
+        failed_node_id=candidate.failed_node_id,
+        target_node_id=candidate.target_node_id,
     )
     task_graph["task_answer"] = {
-        "disconnected_ap_ids": list(candidate.disconnected_ap_ids)
+        "impacted_ap_ids": list(candidate.impacted_ap_ids)
     }
     task_graph["task_metadata"] = {
         "task_name": "single_node_failure_ap_connectivity_impact",
@@ -430,6 +500,7 @@ def build_task_graph(
         "source_file": source_file,
         "fault_assumption": "specified_non_ap_node_failure",
         "normal_upstream_policy": "highest_priority_reachable_exact_role",
+        "impact_rule": "shortest_path_increased_or_target_unreachable",
     }
     return task_graph
 
@@ -487,10 +558,17 @@ def make_stats_row(
         "failed_device_name": node_info.name_by_id.get(failed_node_id, failed_node_id),
         "failed_device_type": node_info.type_by_id.get(failed_node_id, ""),
         "failed_device_role": node_info.role_by_id.get(failed_node_id, ""),
+        "target_node_id": candidate.target_node_id,
+        "target_device_name": node_info.name_by_id.get(
+            candidate.target_node_id,
+            candidate.target_node_id,
+        ),
+        "target_device_type": node_info.type_by_id.get(candidate.target_node_id, ""),
+        "target_device_role": node_info.role_by_id.get(candidate.target_node_id, ""),
         "impact_level": candidate.impact_level,
-        "disconnected_ap_count": len(candidate.disconnected_ap_ids),
-        "disconnected_ap_ids": json.dumps(
-            candidate.disconnected_ap_ids,
+        "impacted_ap_count": len(candidate.impacted_ap_ids),
+        "impacted_ap_ids": json.dumps(
+            candidate.impacted_ap_ids,
             ensure_ascii=False,
         ),
     }
@@ -507,9 +585,13 @@ def write_stats(output_root: Path, rows: list[dict[str, Any]]) -> None:
         "failed_device_name",
         "failed_device_type",
         "failed_device_role",
+        "target_node_id",
+        "target_device_name",
+        "target_device_type",
+        "target_device_role",
         "impact_level",
-        "disconnected_ap_count",
-        "disconnected_ap_ids",
+        "impacted_ap_count",
+        "impacted_ap_ids",
     ]
     with (output_root / STATS_FILE).open(
         "w", encoding="utf-8-sig", newline=""
@@ -537,9 +619,9 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
         "seed": args.seed,
         "samples_per_graph": args.samples_per_graph,
         "impact_levels": {
-            "small": "1-5 disconnected APs",
-            "medium": "6-20 disconnected APs",
-            "large": ">20 disconnected APs",
+            "small": "1-5 impacted APs",
+            "medium": "6-20 impacted APs",
+            "large": ">20 impacted APs",
         },
         "target_role_priority": [
             {"rank": rank, "tier": tier, "role": role}
@@ -592,14 +674,23 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
                         if not baselines:
                             reason = "no-ap-with-reachable-supported-upstream-role"
                         else:
-                            candidates = collect_candidates(
-                                graph,
-                                node_info,
-                                adjacency,
-                                baselines,
-                            )
-                            if not candidates:
-                                reason = "no-eligible-non-ap-failure-candidate"
+                            target_node_id = choose_target_node(baselines, rng)
+                            if target_node_id is None:
+                                reason = "no-selectable-upstream-target-node"
+                            else:
+                                baseline_distances = build_baseline_distances(
+                                    adjacency,
+                                    baselines,
+                                    target_node_id,
+                                )
+                                candidates = collect_candidates(
+                                    node_info,
+                                    adjacency,
+                                    target_node_id,
+                                    baseline_distances,
+                                )
+                                if not candidates:
+                                    reason = "no-eligible-non-ap-failure-candidate"
 
             selected = select_candidates(
                 candidates,
