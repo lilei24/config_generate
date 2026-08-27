@@ -39,9 +39,7 @@ TARGET_ROLE_PRIORITY: tuple[tuple[str, str], ...] = (
 
 IMPACT_LEVEL_ORDER = ("small", "medium", "large")
 
-QUESTION_TEMPLATE = """节点 ID {failed_node_id} 发生故障，指定上游目标节点为节点 ID {target_node_id}。
-
-请找出所有受到影响的 AP 节点。
+QUESTION_TEMPLATE = """节点 ID {failed_node_id} 发生故障，影响了哪些 AP 节点到达其上游节点 ID {target_node_id}？
 
 请严格按照以下 JSON Schema 输出：
 {{
