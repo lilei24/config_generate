@@ -303,15 +303,37 @@ def connected_components(
 def select_baseline_target(
     reachable: set[str],
     node_info: NodeInformation,
+    adjacency: dict[str, set[str]],
+    ap_id: str,
 ) -> BaselineTarget | None:
     for rank, (tier, role) in enumerate(TARGET_ROLE_PRIORITY, start=1):
-        target_ids = frozenset(
+        role_target_ids = sorted(
             node_id
             for node_id in reachable
             if node_info.role_by_id.get(node_id) == role
         )
-        if target_ids:
-            return BaselineTarget(rank, tier, role, target_ids)
+        if not role_target_ids:
+            continue
+
+        distances = {
+            node_id: shortest_distance(adjacency, ap_id, node_id)
+            for node_id in role_target_ids
+        }
+        finite_distances = {
+            node_id: distance
+            for node_id, distance in distances.items()
+            if distance is not None
+        }
+        if not finite_distances:
+            continue
+
+        nearest_distance = min(finite_distances.values())
+        nearest_target_ids = frozenset(
+            node_id
+            for node_id, distance in finite_distances.items()
+            if distance == nearest_distance
+        )
+        return BaselineTarget(rank, tier, role, nearest_target_ids)
     return None
 
 
@@ -331,6 +353,8 @@ def build_ap_baselines(
             baseline = select_baseline_target(
                 reachable_nodes(adjacency, ap_id),
                 node_info,
+                adjacency,
+                ap_id,
             )
             if baseline is not None:
                 baselines[ap_id] = baseline
@@ -347,6 +371,8 @@ def build_ap_baselines(
         baseline = select_baseline_target(
             nodes_by_component[component_id],
             node_info,
+            adjacency,
+            ap_id,
         )
         if baseline is not None:
             baselines[ap_id] = baseline
@@ -355,9 +381,9 @@ def build_ap_baselines(
 
 def choose_target_node(
     baselines: dict[str, BaselineTarget],
-    rng: random.Random,
+    adjacency: dict[str, set[str]],
 ) -> str | None:
-    """从各 AP 按原优先级选出的正常上游目标中固定选择一个节点。"""
+    """选择与其候选 AP 距离最近的正常上游目标，节点 ID 用于稳定打破平局。"""
 
     target_node_ids = sorted(
         {
@@ -366,7 +392,22 @@ def choose_target_node(
             for target_node_id in baseline.target_node_ids
         }
     )
-    return rng.choice(target_node_ids) if target_node_ids else None
+    if not target_node_ids:
+        return None
+
+    scored_targets: list[tuple[int, str]] = []
+    for target_node_id in target_node_ids:
+        distances = [
+            distance
+            for ap_id, baseline in baselines.items()
+            if target_node_id in baseline.target_node_ids
+            for distance in [shortest_distance(adjacency, ap_id, target_node_id)]
+            if distance is not None
+        ]
+        if distances:
+            scored_targets.append((min(distances), target_node_id))
+
+    return min(scored_targets)[1] if scored_targets else None
 
 
 def build_baseline_distances(
@@ -672,7 +713,10 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
                         if not baselines:
                             reason = "no-ap-with-reachable-supported-upstream-role"
                         else:
-                            target_node_id = choose_target_node(baselines, rng)
+                            target_node_id = choose_target_node(
+                                baselines,
+                                adjacency,
+                            )
                             if target_node_id is None:
                                 reason = "no-selectable-upstream-target-node"
                             else:
