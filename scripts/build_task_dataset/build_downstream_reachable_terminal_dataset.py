@@ -32,20 +32,34 @@ SUMMARY_FILE = "build_summary.json"
 ISSUES_FILE = "build_issues.jsonl"
 UPSTREAM_ROLES = ("CORE", "Firewall")
 
-QUESTION_TEMPLATE = """请根据给定的无向物理网络拓扑，查找核心上游节点 ID {upstream_node_id} 的全部下游可达终端。
+QUESTION_TEMPLATE = """请查找核心上游节点 ID {upstream_node_id}（DEVICEROLE 为 {upstream_role}）的全部下游可达终端节点。
 
-规则：
-- 核心上游节点 {upstream_node_id} 的设备角色是 {upstream_role}；
-- 终端叶子节点是指整张无向拓扑中仅连接一条物理链路的节点，即节点度数为 1；
-- 只比较终端叶子节点到所有 {upstream_role} 节点的最短路径距离，不与其他角色比较；
-- 只有 {upstream_node_id} 是唯一最近的 {upstream_role} 节点时，该终端才属于它；
-- 如果其他 {upstream_role} 节点距离更近，或者多个 {upstream_role} 节点距离并列，则不能输出该终端；
-- 输出节点必须使用 nodes[].id，不能使用设备名称；节点 ID 不能重复，并按字典序排列；
-- 不要输出解释、Markdown 代码块或其他字段，只输出合法 JSON。
-
-输出格式：
+请严格按照以下 JSON Schema 输出：
 {{
-  "downstream_leaf_node_ids": ["叶子节点ID"]
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "downstream_leaf_node_ids"
+  ],
+  "properties": {{
+    "downstream_leaf_node_ids": {{
+      "type": "array",
+      "description": "全部下游可达终端的节点 ID",
+      "items": {{
+        "type": "string"
+      }}
+    }}
+  }}
+}}
+
+只输出 JSON，不要输出解释、Markdown 或代码块。
+
+输出示例如下：
+{{
+  "downstream_leaf_node_ids": [
+    "AP_NODE_1",
+    "AP_NODE_2"
+  ]
 }}"""
 
 
