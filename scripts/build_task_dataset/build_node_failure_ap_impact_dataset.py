@@ -41,7 +41,7 @@ IMPACT_LEVEL_ORDER = ("small", "medium", "large")
 
 QUESTION_TEMPLATE = """节点 ID {failed_node_id} 发生故障，指定上游目标节点为节点 ID {target_node_id}。
 
-请找出所有受到影响的 AP 节点。如果某个 AP 到指定上游目标节点的最短路径比故障前更长，或者故障后无法到达该目标节点，则认为该 AP 受到影响。
+请找出所有受到影响的 AP 节点。
 
 请严格按照以下 JSON Schema 输出：
 {{
