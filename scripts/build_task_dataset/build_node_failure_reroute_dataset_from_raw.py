@@ -507,9 +507,52 @@ def build_task_graph(
     task_graph["task_failed_node_id"] = candidate.failed_node_id
     task_graph["task_question"] = (
         f"节点 ID {candidate.failed_node_id} 发生故障。请查找节点 ID "
-        f"{candidate.source_id} 到节点 ID {candidate.target_id} 当前可用的全部"
-        "最短物理路径，计算时不得经过该故障节点。请输出最短跳数和全部"
-        "最短路径，路径中的节点使用节点 ID。"
+        f"{candidate.source_id} 到节点 ID {candidate.target_id} 不经过该故障节点的"
+        "全部最短物理路径。\n\n"
+        "请严格按照以下 JSON Schema 输出：\n"
+        "{\n"
+        '  "type": "object",\n'
+        '  "additionalProperties": false,\n'
+        '  "required": [\n'
+        '    "path_length",\n'
+        '    "paths"\n'
+        "  ],\n"
+        '  "properties": {\n'
+        '    "path_length": {\n'
+        '      "type": "integer",\n'
+        '      "description": "避开故障节点后的最短路径跳数"\n'
+        "    },\n"
+        '    "paths": {\n'
+        '      "type": "array",\n'
+        '      "description": "避开故障节点后的全部最短路径，路径中的节点使用节点 ID",\n'
+        '      "items": {\n'
+        '        "type": "array",\n'
+        '        "items": {\n'
+        '          "type": "string"\n'
+        "        }\n"
+        "      }\n"
+        "    }\n"
+        "  }\n"
+        "}\n\n"
+        "请返回全部最短路径。只输出 JSON，不要输出解释、Markdown 或代码块。\n\n"
+        "输出示例如下：\n"
+        "{\n"
+        '  "path_length": 3,\n'
+        '  "paths": [\n'
+        "    [\n"
+        '      "AP_NODE_1",\n'
+        '      "ACC_NODE_2",\n'
+        '      "AGG_NODE_1",\n'
+        '      "CORE_NODE_1"\n'
+        "    ],\n"
+        "    [\n"
+        '      "AP_NODE_1",\n'
+        '      "ACC_NODE_3",\n'
+        '      "AGG_NODE_2",\n'
+        '      "CORE_NODE_1"\n'
+        "    ]\n"
+        "  ]\n"
+        "}"
     )
     task_graph["task_answer"] = {
         "path_length": len(candidate.reroute_paths[0]) - 1,
