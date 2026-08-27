@@ -380,6 +380,38 @@ def process_file(
         f"请查找从 AP 节点 ID {source} 到 DEVICEROLE 为 "
         f"{target_role} 的最近设备的全部最短物理路径。"
         "请输出最短跳数和全部最短路径，路径中的节点使用节点 ID。"
+        "\n\n请严格按照以下 JSON Schema 输出：\n"
+        "{\n"
+        '  "type": "object",\n'
+        '  "additionalProperties": false,\n'
+        '  "required": [\n'
+        '    "path_length",\n'
+        '    "paths"\n'
+        "  ],\n"
+        '  "properties": {\n'
+        '    "path_length": {\n'
+        '      "type": "integer",\n'
+        '      "description": "最短路径的跳数"\n'
+        "    },\n"
+        '    "paths": {\n'
+        '      "type": "array",\n'
+        '      "description": "全部最短路径的节点 ID 序列",\n'
+        '      "items": {\n'
+        '        "type": "array",\n'
+        '        "items": {"type": "string"}\n'
+        "      }\n"
+        "    }\n"
+        "  }\n"
+        "}\n\n"
+        "请返回全部最短路径。只输出 JSON，不要输出解释、Markdown 或代码块。\n\n"
+        "输出示例如下：\n"
+        "{\n"
+        '  "path_length": 2,\n'
+        '  "paths": [\n'
+        '    ["AP_NODE_1", "ACC_NODE_1", "CORE_NODE_1"],\n'
+        '    ["AP_NODE_1", "ACC_NODE_2", "CORE_NODE_1"]\n'
+        "  ]\n"
+        "}"
     )
     task_graph["task_answer"] = build_answer(
         node_paths=node_paths,
