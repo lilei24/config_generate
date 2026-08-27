@@ -38,31 +38,53 @@ ISSUES_FILE = "build_issues.jsonl"
 DETOUR = "forced_core_detour"
 NATURAL = "natural_via_core"
 
-QUESTION_TEMPLATE = """请根据给定的无向物理网络拓扑，查找 AP 节点 ID {source_ap_id} 到 AP 节点 ID {target_ap_id} 必须经过 CORE 节点 ID {required_core_id} 的全部最短物理路径。
+QUESTION_TEMPLATE = """请查找 AP 节点 ID {source_ap_id} 到 AP 节点 ID {target_ap_id} 必须经过 CORE 节点 ID {required_core_id} 的全部最短物理路径。
 
-要求：
-- 每条路径必须从 {source_ap_id} 开始，在 {target_ap_id} 结束；
-- {required_core_id} 必须作为路径的中间节点；
-- 路径中的节点使用 nodes[].id；
-- 路径不能重复经过同一个节点；
-- path_length 是链路跳数，即路径节点数减一；
-- 如果存在多条等长的最短合法路径，必须全部输出；
-- paths 中不能包含重复路径，并按节点 ID 序列的字典序排列；
-- 不要输出解释、Markdown 代码块或其他字段，只输出一个合法 JSON 对象。
-
-实际输出示例：
-
+请严格按照以下 JSON Schema 输出：
 {{
-  "path_length": 6,
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "path_length",
+    "paths"
+  ],
+  "properties": {{
+    "path_length": {{
+      "type": "integer",
+      "description": "经过指定 CORE 节点的最短路径跳数"
+    }},
+    "paths": {{
+      "type": "array",
+      "description": "经过指定 CORE 节点的全部最短路径，路径中的节点使用节点 ID",
+      "items": {{
+        "type": "array",
+        "items": {{
+          "type": "string"
+        }}
+      }}
+    }}
+  }}
+}}
+
+请返回全部最短路径。只输出 JSON，不要输出解释、Markdown 或代码块。
+
+输出示例如下：
+{{
+  "path_length": 4,
   "paths": [
     [
-      "AP_A",
-      "ACC_A",
-      "AGG_A",
-      "CORE_1",
-      "AGG_B",
-      "ACC_B",
-      "AP_B"
+      "AP_NODE_1",
+      "ACC_NODE_1",
+      "CORE_NODE_1",
+      "ACC_NODE_2",
+      "AP_NODE_2"
+    ],
+    [
+      "AP_NODE_1",
+      "ACC_NODE_3",
+      "CORE_NODE_1",
+      "ACC_NODE_4",
+      "AP_NODE_2"
     ]
   ]
 }}"""
