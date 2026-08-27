@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""评估指定节点故障后的失联 AP 集合推理结果。"""
+"""评估指定节点故障后到目标节点的路径受到影响的 AP 集合。"""
 
 from __future__ import annotations
 
@@ -54,9 +54,9 @@ def evaluate_document(
     if not isinstance(answer, dict) or not isinstance(prediction, dict):
         return metrics, details
 
-    gold_ids, _, _ = normalize_ap_ids(answer.get("disconnected_ap_ids"))
+    gold_ids, _, _ = normalize_ap_ids(answer.get("impacted_ap_ids"))
     predicted_ids, predicted_count, malformed = normalize_ap_ids(
-        prediction.get("disconnected_ap_ids")
+        prediction.get("impacted_ap_ids")
     )
     true_positive = len(predicted_ids & gold_ids)
     false_positive = len(predicted_ids - gold_ids) + malformed
