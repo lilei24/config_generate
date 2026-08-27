@@ -320,9 +320,65 @@ def process_file(
     task_graph["task_source_node_id"] = source
     task_graph["task_target_node_id"] = target
     task_graph["task_question"] = (
-        f"请查找节点 ID {source} 到节点 ID {target} 的全部最短物理路径。"
-        "请输出最短路径长度、全部最短路径的节点 ID 序列，以及每条路径"
-        "对应的设备名称序列和 DEVICEROLE 序列。"
+        f"请查找节点 ID {source} 到节点 ID {target} 的全部最短物理路径。\n\n"
+        "请严格按照以下 JSON Schema 输出：\n"
+        "{\n"
+        '  "type": "object",\n'
+        '  "additionalProperties": false,\n'
+        '  "required": [\n'
+        '    "path_length",\n'
+        '    "paths",\n'
+        '    "path_role_sequences",\n'
+        '    "path_device_names"\n'
+        "  ],\n"
+        '  "properties": {\n'
+        '    "path_length": {\n'
+        '      "type": "integer",\n'
+        '      "description": "最短路径的跳数"\n'
+        "    },\n"
+        '    "paths": {\n'
+        '      "type": "array",\n'
+        '      "description": "全部最短路径的节点 ID 序列",\n'
+        '      "items": {\n'
+        '        "type": "array",\n'
+        '        "items": {"type": "string"}\n'
+        "      }\n"
+        "    },\n"
+        '    "path_role_sequences": {\n'
+        '      "type": "array",\n'
+        '      "description": "每条路径对应的 DEVICEROLE 序列",\n'
+        '      "items": {\n'
+        '        "type": "array",\n'
+        '        "items": {"type": "string"}\n'
+        "      }\n"
+        "    },\n"
+        '    "path_device_names": {\n'
+        '      "type": "array",\n'
+        '      "description": "每条路径对应的设备名称序列",\n'
+        '      "items": {\n'
+        '        "type": "array",\n'
+        '        "items": {"type": "string"}\n'
+        "      }\n"
+        "    }\n"
+        "  }\n"
+        "}\n\n"
+        "请返回全部最短路径。只输出 JSON，不要输出解释、Markdown 或代码块。\n\n"
+        "输出实例如下：\n"
+        "{\n"
+        '  "path_length": 2,\n'
+        '  "paths": [\n'
+        '    ["NODE_A", "NODE_B", "NODE_C"],\n'
+        '    ["NODE_A", "NODE_D", "NODE_C"]\n'
+        "  ],\n"
+        '  "path_role_sequences": [\n'
+        '    ["AP", "ACC", "CORE"],\n'
+        '    ["AP", "AGG", "CORE"]\n'
+        "  ],\n"
+        '  "path_device_names": [\n'
+        '    ["AP_1", "SW_1", "CORE_1"],\n'
+        '    ["AP_1", "SW_2", "CORE_1"]\n'
+        "  ]\n"
+        "}"
     )
     task_graph["task_answer"] = build_answer(
         node_paths,
