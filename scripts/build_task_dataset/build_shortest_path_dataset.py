@@ -363,7 +363,7 @@ def process_file(
         "  }\n"
         "}\n\n"
         "请返回全部最短路径。只输出 JSON，不要输出解释、Markdown 或代码块。\n\n"
-        "输出实例如下：\n"
+        "输出示例如下：\n"
         "{\n"
         '  "path_length": 2,\n'
         '  "paths": [\n'
