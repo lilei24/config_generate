@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """构造“指定 CORE 或 Firewall 的下游可达终端”任务数据集。
 
-物理链路统一按无向简单图处理。终端叶子定义为度数等于 1，且自身角色不是
-CORE/Firewall 的节点。CORE 与 Firewall 分别建立归属体系：叶子节点只归属于
-唯一最近的同角色核心上游节点；同角色距离并列时不归属于任何一方。
+物理链路统一按无向简单图处理。终端叶子定义为度数等于 1、设备类型为 AP
+或 LSW，且自身角色不是 CORE/Firewall 的节点。CORE 与 Firewall 分别建立
+归属体系：叶子节点只归属于唯一最近的同角色核心上游节点；同角色距离并列时
+不归属于任何一方。
 """
 
 from __future__ import annotations
@@ -31,6 +32,7 @@ STATS_FILE = "downstream_reachable_terminal_stats.csv"
 SUMMARY_FILE = "build_summary.json"
 ISSUES_FILE = "build_issues.jsonl"
 UPSTREAM_ROLES = ("CORE", "Firewall")
+TERMINAL_DEVICE_TYPES = ("AP", "LSW")
 
 QUESTION_TEMPLATE = """请查找核心上游节点 ID {upstream_node_id}（DEVICEROLE 为 {upstream_role}）的全部下游可达终端节点。
 
@@ -39,10 +41,10 @@ QUESTION_TEMPLATE = """请查找核心上游节点 ID {upstream_node_id}（DEVIC
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "downstream_leaf_node_ids"
+    "downstream_terminal_node_ids"
   ],
   "properties": {{
-    "downstream_leaf_node_ids": {{
+    "downstream_terminal_node_ids": {{
       "type": "array",
       "description": "全部下游可达终端的节点 ID",
       "items": {{
@@ -56,7 +58,7 @@ QUESTION_TEMPLATE = """请查找核心上游节点 ID {upstream_node_id}（DEVIC
 
 输出示例如下：
 {{
-  "downstream_leaf_node_ids": [
+  "downstream_terminal_node_ids": [
     "AP_NODE_1",
     "AP_NODE_2"
   ]
@@ -67,6 +69,7 @@ QUESTION_TEMPLATE = """请查找核心上游节点 ID {upstream_node_id}（DEVIC
 class NodeInformation:
     node_ids: list[str]
     role_by_id: dict[str, str]
+    type_by_id: dict[str, str]
 
 
 def parse_args() -> argparse.Namespace:
@@ -135,6 +138,16 @@ def get_node_role(node: dict[str, Any]) -> str:
     return str(value).strip() if value is not None else ""
 
 
+def get_node_type(node: dict[str, Any]) -> str:
+    device = node.get("device")
+    if not isinstance(device, dict):
+        device = node.get("devices")
+    if not isinstance(device, dict):
+        return ""
+    value = device.get("TYPE")
+    return str(value).strip() if value is not None else ""
+
+
 def collect_node_information(
     graph: dict[str, Any],
 ) -> tuple[NodeInformation | None, Counter[str], str]:
@@ -145,6 +158,7 @@ def collect_node_information(
 
     node_ids: list[str] = []
     role_by_id: dict[str, str] = {}
+    type_by_id: dict[str, str] = {}
     duplicates: set[str] = set()
     for node in nodes:
         if not isinstance(node, dict):
@@ -160,11 +174,12 @@ def collect_node_information(
             continue
         node_ids.append(node_id)
         role_by_id[node_id] = get_node_role(node)
+        type_by_id[node_id] = get_node_type(node)
     if duplicates:
         return None, ignored, "duplicate-node-id: " + ", ".join(sorted(duplicates))
     if not node_ids:
         return None, ignored, "no-valid-node-id"
-    return NodeInformation(sorted(node_ids), role_by_id), ignored, ""
+    return NodeInformation(sorted(node_ids), role_by_id, type_by_id), ignored, ""
 
 
 def build_adjacency(
@@ -239,6 +254,7 @@ def assign_leaf_nodes(
         node_id
         for node_id in node_info.node_ids
         if len(adjacency[node_id]) == 1
+        and node_info.type_by_id.get(node_id) in TERMINAL_DEVICE_TYPES
         and node_info.role_by_id.get(node_id) not in UPSTREAM_ROLES
     )
     distances_by_upstream = {
@@ -306,7 +322,7 @@ def build_task_graph(
         upstream_role=upstream_role,
     )
     task_graph["task_answer"] = {
-        "downstream_leaf_node_ids": downstream_leaf_ids,
+        "downstream_terminal_node_ids": downstream_leaf_ids,
     }
     task_graph["task_metadata"] = {
         "task_name": "downstream_reachable_terminal",
@@ -314,7 +330,8 @@ def build_task_graph(
         "source_file": source_file,
         "upstream_role": upstream_role,
         "graph_policy": "undirected_simple_physical_topology",
-        "leaf_policy": "unique_neighbor_degree_equals_one",
+        "leaf_policy": "degree_one_ap_or_lsw_excluding_upstream_roles",
+        "terminal_device_types": list(TERMINAL_DEVICE_TYPES),
         "assignment_policy": "unique_nearest_same_role_upstream",
         "upstream_roles": list(UPSTREAM_ROLES),
         "equal_distance_policy": "exclude",
@@ -382,7 +399,8 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
         "samples_per_graph": 1,
         "upstream_roles": list(UPSTREAM_ROLES),
         "graph_policy": "undirected_simple_physical_topology",
-        "leaf_policy": "unique_neighbor_degree_equals_one",
+        "leaf_policy": "degree_one_ap_or_lsw_excluding_upstream_roles",
+        "terminal_device_types": list(TERMINAL_DEVICE_TYPES),
         "assignment_policy": "unique_nearest_same_role_upstream",
         "equal_distance_policy": "exclude",
         "splits": {},
@@ -460,7 +478,7 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
                         node_id for node_id in upstream_ids if assignments.get(node_id)
                     )
                     if not leaf_node_ids:
-                        reason = "no-degree-one-terminal-leaf"
+                        reason = "no-degree-one-ap-or-lsw-terminal"
                     elif not eligible_upstream_ids:
                         reason = "no-upstream-with-uniquely-assigned-leaf"
                     else:

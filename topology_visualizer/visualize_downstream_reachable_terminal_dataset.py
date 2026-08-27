@@ -274,9 +274,9 @@ def parse_sample(path: Path, source_label: str) -> tuple[dict[str, Any], PageRec
     answer = document.get("task_answer")
     if not isinstance(answer, dict):
         raise ValueError("缺少 task_answer 对象")
-    raw_leaf_ids = answer.get("downstream_leaf_node_ids")
+    raw_leaf_ids = answer.get("downstream_terminal_node_ids")
     if not isinstance(raw_leaf_ids, list):
-        raise ValueError("task_answer.downstream_leaf_node_ids 不是数组")
+        raise ValueError("task_answer.downstream_terminal_node_ids 不是数组")
     downstream_leaf_ids = normalize_node_ids(raw_leaf_ids)
     downstream_leaf_set = set(downstream_leaf_ids)
 
@@ -372,6 +372,8 @@ def parse_sample(path: Path, source_label: str) -> tuple[dict[str, Any], PageRec
             continue
         if len(adjacency[leaf_id]) != 1:
             issues["answer-node-degree-not-one"] += 1
+        if leaf["type"] not in ("AP", "LSW"):
+            issues["answer-node-type-not-ap-or-lsw"] += 1
         if leaf["role"] in UPSTREAM_ROLES:
             issues["answer-node-is-upstream-role"] += 1
         selected_distance = selected_distances.get(leaf_id)
@@ -408,7 +410,11 @@ def parse_sample(path: Path, source_label: str) -> tuple[dict[str, Any], PageRec
         node["isUpstream"] = node_id == upstream_node_id
         node["isAnswerLeaf"] = node_id in downstream_leaf_set
         node["isSameRoleUpstream"] = node_id in same_role_upstream_ids
-        node["isLeaf"] = len(adjacency[node_id]) == 1
+        node["isLeaf"] = (
+            len(adjacency[node_id]) == 1
+            and node["type"] in ("AP", "LSW")
+            and node["role"] not in UPSTREAM_ROLES
+        )
         node["inContextPath"] = node_id in context_nodes
         nodes.append(node)
 
