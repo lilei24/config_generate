@@ -1,6 +1,6 @@
-# build_node_failure_reroute_dataset_from_raw.py
+# build_node_failure_reroute_dataset.py
 
-> 代码位置：[`scripts/build_task_dataset/build_node_failure_reroute_dataset_from_raw.py`](../../../scripts/build_task_dataset/build_node_failure_reroute_dataset_from_raw.py)
+> 代码位置：[`scripts/build_task_dataset/build_node_failure_reroute_dataset.py`](../../../scripts/build_task_dataset/build_node_failure_reroute_dataset.py)
 
 ## 功能与业务价值
 
@@ -60,7 +60,7 @@
 ## 运行方式
 
 ```bash
-python scripts/build_task_dataset/build_node_failure_reroute_dataset_from_raw.py --help
+python scripts/build_task_dataset/build_node_failure_reroute_dataset.py --help
 ```
 
 确认数据路径和输出路径后，可去掉 `--help` 并传入上表参数执行。
