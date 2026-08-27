@@ -175,6 +175,72 @@ def json_for_script(value: Any) -> str:
         .replace("\u2029", "\\u2029")
     )
 
+GRAPH_PAN_ZOOM_SCRIPT = r"""
+<script>
+(() => {
+  const graphViewport = document.getElementById("viewport");
+  const graphSvg = document.getElementById("graph");
+  if (!graphViewport || !graphSvg || typeof applyScale !== "function") return;
+
+  let panState = null;
+  graphViewport.style.cursor = "grab";
+  graphViewport.style.overscrollBehavior = "contain";
+
+  graphViewport.addEventListener("mousedown", event => {
+    const interactive = event.target instanceof Element
+      && event.target.closest(".node, .edge");
+    if (event.button !== 0 || interactive) return;
+    event.preventDefault();
+    panState = {
+      clientX: event.clientX,
+      clientY: event.clientY,
+      scrollLeft: graphViewport.scrollLeft,
+      scrollTop: graphViewport.scrollTop,
+    };
+    graphViewport.style.cursor = "grabbing";
+    graphViewport.style.userSelect = "none";
+  });
+
+  window.addEventListener("mousemove", event => {
+    if (!panState) return;
+    event.preventDefault();
+    graphViewport.scrollLeft =
+      panState.scrollLeft - (event.clientX - panState.clientX);
+    graphViewport.scrollTop =
+      panState.scrollTop - (event.clientY - panState.clientY);
+  });
+
+  window.addEventListener("mouseup", () => {
+    if (!panState) return;
+    panState = null;
+    graphViewport.style.cursor = "grab";
+    graphViewport.style.userSelect = "";
+  });
+
+  graphViewport.addEventListener("wheel", event => {
+    event.preventDefault();
+    const rect = graphViewport.getBoundingClientRect();
+    const pointerX = event.clientX - rect.left;
+    const pointerY = event.clientY - rect.top;
+    const graphX = (graphViewport.scrollLeft + pointerX) / scale;
+    const graphY = (graphViewport.scrollTop + pointerY) / scale;
+    const zoomFactor = Math.exp(-event.deltaY * 0.0015);
+    const nextScale = Math.max(0.2, Math.min(3, scale * zoomFactor));
+    if (nextScale === scale) return;
+
+    scale = nextScale;
+    applyScale();
+    graphViewport.scrollLeft = graphX * scale - pointerX;
+    graphViewport.scrollTop = graphY * scale - pointerY;
+  }, { passive: false });
+})();
+</script>
+"""
+
+
+def inject_graph_pan_zoom(page: str) -> str:
+    return page.replace("</body>", GRAPH_PAN_ZOOM_SCRIPT + "</body>", 1)
+
 
 def parse_sample(path: Path, source_label: str) -> tuple[dict[str, Any], PageRecord]:
     document = json.loads(path.read_text(encoding="utf-8"))
@@ -339,7 +405,7 @@ def parse_sample(path: Path, source_label: str) -> tuple[dict[str, Any], PageRec
 
 def page_html(payload: dict[str, Any]) -> str:
     title = html.escape(payload["sourceFile"])
-    return f'''<!doctype html>
+    return inject_graph_pan_zoom(f'''<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{title} - 节点故障绕行可视化</title>
 <style>
@@ -395,7 +461,7 @@ document.getElementById("showAll").addEventListener("click",()=>{{taskOnly=false
 function locate(){{const q=document.getElementById("search").value.trim().toLowerCase();if(!q)return;const node=data.nodes.find(n=>n.id.toLowerCase().includes(q)||n.name.toLowerCase().includes(q));if(!node)return;showNode(node);scale=Math.max(scale,1);applyScale();viewport.scrollTo({{left:Math.max(0,node.x*scale-viewport.clientWidth/2),top:Math.max(0,node.y*scale-viewport.clientHeight/2),behavior:"smooth"}});}}document.getElementById("find").addEventListener("click",locate);document.getElementById("search").addEventListener("keydown",event=>{{if(event.key==="Enter")locate();}});
 document.getElementById("zoomIn").addEventListener("click",()=>{{scale=Math.min(3,scale*1.2);applyScale();}});document.getElementById("zoomOut").addEventListener("click",()=>{{scale=Math.max(.2,scale/1.2);applyScale();}});document.getElementById("fit").addEventListener("click",()=>{{scale=Math.min(1,(viewport.clientWidth-20)/data.canvas.width,(viewport.clientHeight-20)/data.canvas.height);viewport.scrollTo(0,0);applyScale();}});
 render();showSummary();setTimeout(()=>document.getElementById("fit").click(),0);
-</script></body></html>'''
+</script></body></html>''')
 
 
 def index_html(records: list[PageRecord]) -> str:
