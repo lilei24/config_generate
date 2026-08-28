@@ -102,6 +102,47 @@ def finish_swanlab(swanlab: Any | None) -> None:
         swanlab.finish()
 
 
+def json_table_text(value: Any) -> str:
+    return "" if value is None else json.dumps(value, ensure_ascii=False, indent=2)
+
+
+def build_table_row(
+    json_name: str,
+    document: dict[str, Any] | None,
+) -> list[str]:
+    if document is None:
+        return [json_name, "", "", ""]
+    context = {
+        key: value
+        for key, value in document.items()
+        if key
+        not in {
+            "task_answer",
+            "model-output",
+            "inference_metadata",
+            "vllm-run",
+        }
+    }
+    return [
+        json_name,
+        json_table_text(context),
+        json_table_text(document.get("task_answer")),
+        json_table_text(document.get("model-output")),
+    ]
+
+
+def log_sample_table(swanlab: Any | None, rows: list[list[str]]) -> None:
+    if swanlab is None:
+        return
+    echarts = getattr(swanlab, "echarts", None)
+    table_class = getattr(echarts, "Table", None) if echarts else None
+    if table_class is None:
+        raise RuntimeError("当前 SwanLab 版本不支持 swanlab.echarts.Table")
+    table = table_class()
+    table.add(["json_name", "context", "answer", "model-output"], rows)
+    swanlab.log({"sample/details": table})
+
+
 def main() -> None:
     args = parse_args()
     spec = get_task_spec(args.task)
@@ -115,12 +156,14 @@ def main() -> None:
     sums = {name: 0.0 for name in names}
     rows: list[dict[str, Any]] = []
     error_rows: list[dict[str, Any]] = []
+    table_rows: list[list[str]] = []
     averaging_count = 0
     successful_evaluations = 0
     swanlab = init_swanlab(args, spec.name, result_root, names)
 
     try:
         for step, (split, path, relative_path) in enumerate(files, start=1):
+            document: dict[str, Any] | None = None
             metrics = {name: 0.0 for name in names}
             details = {name: 0 for name in DETAIL_NAMES}
             model_returned = False
@@ -157,10 +200,11 @@ def main() -> None:
                             for name in names
                         }
                     )
-                payload["eval/model_success_rate"] = successful_evaluations / step
-                payload["eval/averaging_sample_count"] = float(averaging_count)
-                swanlab.log(payload, step=step)
+                if payload:
+                    swanlab.log(payload, step=step)
 
+            json_name = f"{split}/{relative_path}"
+            table_rows.append(build_table_row(json_name, document))
             rows.append(
                 {
                     "split": split,
@@ -189,6 +233,7 @@ def main() -> None:
                     f"average_denominator={averaging_count}",
                     flush=True,
                 )
+        log_sample_table(swanlab, table_rows)
     finally:
         finish_swanlab(swanlab)
 
@@ -238,4 +283,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
