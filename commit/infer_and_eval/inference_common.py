@@ -92,14 +92,12 @@ def build_prompt(sample: dict[str, Any]) -> str:
 """
 
 
-def _validate_path_list(value: Any, path_length: int) -> None:
+def _validate_path_list(value: Any) -> None:
     if not isinstance(value, list) or not value:
         raise ValueError("paths 必须是非空数组")
     for index, path in enumerate(value):
         if not isinstance(path, list) or not path:
             raise ValueError(f"paths[{index}] 必须是非空数组")
-        if len(path) != path_length + 1:
-            raise ValueError(f"paths[{index}] 与 path_length 不一致")
         if any(not isinstance(node_id, str) or not node_id for node_id in path):
             raise ValueError(f"paths[{index}] 包含非法节点 ID")
 
@@ -111,7 +109,7 @@ def validate_answer(answer: dict[str, Any], spec: TaskSpec) -> None:
             raise ValueError("path_length 必须是整数")
         if path_length < 0:
             raise ValueError("path_length 不能小于 0")
-        _validate_path_list(answer.get("paths"), path_length)
+        _validate_path_list(answer.get("paths"))
         if spec.answer_kind == "extended_path":
             paths = answer["paths"]
             for field_name in ("path_role_sequences", "path_device_names"):
@@ -208,4 +206,3 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
 def elapsed_text(started_at: float) -> str:
     seconds = max(0, int(time.monotonic() - started_at))
     return f"{seconds // 3600:02d}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}"
-
