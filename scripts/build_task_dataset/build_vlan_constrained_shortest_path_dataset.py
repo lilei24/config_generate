@@ -32,19 +32,42 @@ RANGE_PATTERN = re.compile(r"^(\d+)\s*-\s*(\d+)$")
 INTEGER_PATTERN = re.compile(r"^\d+$")
 VlanSupport = Optional[frozenset[int]]
 
-QUESTION_TEMPLATE = """请根据交换机配置，查找 LSW 节点 {source_node_id} 和节点 {target_node_id} 在 VLAN {vlan_id} 约束下能够端到端通过的最短路径。
+QUESTION_TEMPLATE = """请根据交换机配置，查找 LSW 节点 {source_node_id} 与节点 {target_node_id} 在 VLAN {vlan_id} 约束下能够端到端通行的全部最短路径。路径中的每条链路，其两端端口均须允许 VLAN {vlan_id} 通行。
 
-VLAN {vlan_id} 约束是指：路径中每对相邻节点之间的链路，其两端连接端口都必须允许 VLAN {vlan_id} 通行。
-
-如果存在多条等长最短路径，请全部输出。路径使用 nodes[].id，path_length 表示链路跳数。只输出 JSON 对象。
-
-示例：
-
+请严格按照以下 JSON Schema 输出：
 {{
-  "vlan_id": {vlan_id},
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "path_length",
+    "paths"
+  ],
+  "properties": {{
+    "path_length": {{
+      "type": "integer",
+      "description": "最短路径的链路跳数"
+    }},
+    "paths": {{
+      "type": "array",
+      "description": "全部等长最短路径，路径中的节点使用节点 ID",
+      "items": {{
+        "type": "array",
+        "items": {{
+          "type": "string"
+        }}
+      }}
+    }}
+  }}
+}}
+
+只输出 JSON，不要输出解释、Markdown 或代码块。
+
+输出示例如下：
+{{
   "path_length": 3,
   "paths": [
-    ["LSW_A", "LSW_B", "LSW_C", "LSW_D"]
+    ["LSW_A", "LSW_B", "LSW_C", "LSW_D"],
+    ["LSW_A", "LSW_E", "LSW_F", "LSW_D"]
   ]
 }}"""
 
