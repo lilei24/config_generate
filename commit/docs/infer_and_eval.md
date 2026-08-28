@@ -6,6 +6,18 @@
 
 该模块为七类拓扑任务提供统一的 vLLM 推理和 SwanLab 评估入口。推理与评估完全分离：推理先逐文件保存模型答案，评估再读取结果计算单样本指标和累计宏平均指标。
 
+## 代码子文档
+
+更详细的类、函数、调用链和扩展方式见 [推理评估代码索引](infer_and_eval/README.md)。
+
+| 代码文件 | 子文档 |
+|---|---|
+| `batch_infer_vllm.py` | [统一 vLLM 推理入口](infer_and_eval/batch_infer_vllm.md) |
+| `batch_evaluate.py` | [统一评估入口](infer_and_eval/batch_evaluate.md) |
+| `task_specs.py` | [任务注册与分派](infer_and_eval/task_specs.md) |
+| `inference_common.py` | [推理公共逻辑](infer_and_eval/inference_common.md) |
+| `evaluation_common.py` | [评估公共逻辑](infer_and_eval/evaluation_common.md) |
+
 ## 文件职责
 
 | 文件 | 功能 |
