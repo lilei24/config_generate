@@ -600,7 +600,6 @@ def build_task_graph(
         vlan_id=candidate.vlan_id,
     )
     task_graph["task_answer"] = {
-        "vlan_id": candidate.vlan_id,
         "path_length": candidate.vlan_path_length,
         "paths": [list(path) for path in candidate.paths],
     }
